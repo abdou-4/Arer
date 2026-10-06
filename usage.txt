@@ -1,0 +1,6 @@
+[parser]
+uv run pytest                                       # check that the parser still work
+uv run arer data/samples -o output                  # whole folder
+uv run arer data/samples/mail.msg                   # single file
+uv run arer data/samples -r --trust mx.mycorp.com   # recursive + sender IP detection
+uv run arer data/samples --extract-attachments      # also save attachments to disk
