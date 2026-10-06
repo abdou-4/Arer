@@ -1,0 +1,6 @@
+output/
+data/samples/*
+!data/samples/phish_sample.eml
+__pycache__/
+.venv/
+

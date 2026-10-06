@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling >= 1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "Arer"
+version = "0.0.1"
+authors = [
+  { name="Bouali Abdelillah", email="bouali.abelillah.05@gmail.com" },
+]
+description = "automated tool for phising detection"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+dependencies = [
+    "mail-parser>=4.8.0",
+]
+
+[project.scripts]
+arer="arer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/abdou-4/Arer"
+Issues = "https://github.com/abdou-4/Arer/issues"
