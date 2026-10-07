@@ -19,6 +19,7 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
     "mail-parser>=4.8.0",
+    "pytest>=8.4.2",
 ]
 
 [project.scripts]
