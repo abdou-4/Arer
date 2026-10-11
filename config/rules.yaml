@@ -1,0 +1,87 @@
+# PhishScope scoring rules. Edit this file to tune detection. No code changes needed.
+# A finding id is "<category>.<name>". Analyzers emit the id, this file sets the points.
+
+limits:                     # protection against hostile input
+  max_json_mb: 20           # refuse parser JSON bigger than this
+  analyzer_timeout_s: 10    # per analyzer (used by pipeline.py)
+
+thresholds:                 # score -> level (score is 0-100)
+  suspicious: 20
+  likely_phishing: 45
+  malicious: 70
+
+caps:                       # max points one category can contribute
+  auth: 30
+  sender: 30
+  headers: 10
+  url: 35
+  attachment: 35
+  body: 25
+  ai: 20
+
+weights:
+  # ---- auth (read from Authentication-Results, never re-run SPF) ----
+  auth.spf_fail: 15
+  auth.spf_softfail: 8
+  auth.dkim_fail: 10
+  auth.dkim_none: 3
+  auth.dmarc_fail: 10
+  auth.dmarc_no_policy: 5
+  auth.results_missing: 5
+
+  # ---- sender ----
+  sender.invalid_format: 10
+  sender.reply_to_mismatch: 12
+  sender.display_name_spoof: 15
+  sender.freemail_brand: 8
+  sender.no_mx: 5
+  sender.lookalike_domain: 15
+  sender.punycode_domain: 8
+
+  # ---- headers ----
+  headers.missing_received: 5
+  headers.high_hop_count: 3
+  headers.suspicious_mailer: 5
+  headers.msgid_domain_mismatch: 5
+  headers.returnpath_mismatch: 5
+  headers.missing_date: 2
+  headers.parser_defects: 3
+
+  # ---- url ----
+  url.on_blocklist: 40
+  url.text_href_mismatch: 20
+  url.ip_host: 10
+  url.suspicious_tld: 5
+  url.shortener: 5
+  url.userinfo_at: 8
+  url.many_subdomains: 8
+  url.punycode: 8
+  url.login_keywords: 5
+  url.not_https: 3
+  url.lookalike_domain: 15
+
+  # ---- attachment ----
+  attachment.executable: 15
+  attachment.double_extension: 10
+  attachment.macro_office: 12
+  attachment.archive_with_exe: 12
+  attachment.magic_mismatch: 10
+  attachment.html_or_svg: 10
+  attachment.known_malicious_hash: 40
+
+  # ---- body ----
+  body.urgency_words: 5
+  body.credential_words: 8
+  body.hidden_text: 8
+  body.password_form: 12
+  body.image_only: 5
+  body.generic_greeting: 3
+
+  # ---- ai (later; keep small until validated) ----
+  ai.text_classifier: 10
+  ai.urgency_model: 5
+
+overrides:                  # a finding that forces a minimum level regardless of score
+  - { finding: attachment.executable,          min_level: LIKELY_PHISHING }
+  - { finding: attachment.known_malicious_hash, min_level: MALICIOUS }
+  - { finding: url.on_blocklist,               min_level: MALICIOUS }
