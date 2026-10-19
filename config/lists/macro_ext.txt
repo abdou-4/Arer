@@ -1,0 +1,8 @@
+# macro-capable / risky office extensions
+docm
+xlsm
+pptm
+dotm
+xlam
+xlsb
+ppam

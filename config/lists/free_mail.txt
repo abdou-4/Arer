@@ -1,0 +1,14 @@
+# free mail providers
+gmail.com
+yahoo.com
+outlook.com
+hotmail.com
+live.com
+aol.com
+icloud.com
+proton.me
+protonmail.com
+gmx.com
+mail.com
+yandex.com
+zoho.com

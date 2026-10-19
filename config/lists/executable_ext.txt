@@ -1,0 +1,25 @@
+# dangerous attachment extensions
+exe
+scr
+com
+pif
+bat
+cmd
+ps1
+vbs
+vbe
+js
+jse
+wsf
+wsh
+hta
+msi
+msp
+dll
+jar
+lnk
+iso
+img
+vhd
+cpl
+reg

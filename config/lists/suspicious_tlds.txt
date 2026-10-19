@@ -1,0 +1,20 @@
+# one per line, lowercase, no leading dot
+zip
+top
+xyz
+click
+country
+gq
+tk
+ml
+ga
+cf
+work
+rest
+support
+icu
+buzz
+cyou
+monster
+sbs
+cfd

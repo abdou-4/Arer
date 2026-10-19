@@ -1,0 +1,14 @@
+# URL shorteners
+bit.ly
+tinyurl.com
+t.co
+goo.gl
+ow.ly
+is.gd
+buff.ly
+rebrand.ly
+cutt.ly
+shorturl.at
+tiny.cc
+rb.gy
+s.id

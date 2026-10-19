@@ -185,34 +185,53 @@ class Body(_Base):
 
 class Attachment(_Base):
     """
-    The sample had none, so this accepts several likely key names. Once you
-    parse an email WITH attachments, check the real keys and trim the aliases.
-    Content is never stored here, only metadata and hashes.
+    One attachment, as written by mail_parser._attachments(). Metadata and hashes
+    only. The raw content is never kept: from_raw() reads the first 16 bytes
+    (if the parser embedded the payload) into `magic_hex`, then drops the rest.
     """
-    filename: str = Field("", validation_alias="filename")
-    content_type: str = Field("", validation_alias="mail_content_type")
+    filename: str = ""
+    extension: str = ""                 # lower-case, with dot: ".pdf"
+    content_type: str = ""
+    content_disposition: str = ""       # "attachment" | "inline"
+    content_id: str = ""                # set for inline images
     size_bytes: int = 0
     md5: str = ""
     sha1: str = ""
     sha256: str = ""
-    magic_bytes: str = ""               # hex of first bytes, if your parser adds it
-    is_archive: bool = False
+    is_binary: bool = False
+    magic_hex: str = ""                 # first 16 bytes as hex, "" if unknown
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Attachment":
         raw = raw or {}
         h = raw.get("hashes") or {}
         return cls(
-            filename=_s(raw.get("filename") or raw.get("name"))[:500],
-            content_type=_s(raw.get("content_type") or raw.get("mail_content_type")
-                            or raw.get("mime_type")),
-            size_bytes=raw.get("size_bytes") or raw.get("size") or 0,
-            md5=_s(h.get("md5") or raw.get("md5")),
-            sha1=_s(h.get("sha1") or raw.get("sha1")),
-            sha256=_s(h.get("sha256") or raw.get("sha256")),
-            magic_bytes=_s(raw.get("magic_bytes")),
-            is_archive=bool(raw.get("is_archive", False)),
+            filename=_s(raw.get("filename"))[:500],
+            extension=_s(raw.get("extension")).lower()[:20],
+            content_type=_s(raw.get("content_type")),
+            content_disposition=_s(raw.get("content_disposition")),
+            content_id=_s(raw.get("content_id")),
+            size_bytes=raw.get("size_bytes") or 0,
+            md5=_s(h.get("md5")), sha1=_s(h.get("sha1")), sha256=_s(h.get("sha256")),
+            is_binary=bool(raw.get("is_binary")),
+            magic_hex=_magic(raw),
         )
+
+
+def _magic(raw: dict) -> str:
+    """First 16 bytes of the attachment as hex, from the embedded payload if present."""
+    payload = raw.get("payload")
+    if not payload or not isinstance(payload, str):
+        return ""
+    try:
+        if raw.get("is_binary"):
+            import base64
+            head = base64.b64decode(payload[:32], validate=False)[:16]   # 32 b64 chars = 24 bytes
+        else:
+            head = payload[:16].encode("utf-8", errors="replace")[:16]
+    except Exception:                                                     # noqa: BLE001
+        return ""
+    return head.hex()
 
 
 class Defects(_Base):

@@ -39,6 +39,7 @@ class ConfigError(Exception):
 
 class Limits(BaseModel):
     max_json_mb: int = Field(20, gt=0, le=500)
+    max_eml_mb: int = Field(50, gt=0, le=1000)
     analyzer_timeout_s: int = Field(10, gt=0, le=300)
 
 
