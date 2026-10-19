@@ -1,0 +1,8 @@
+# suspicious X-Mailer values (substring match)
+phpmailer
+the bat
+massmailer
+mass mailer
+sendblaster
+atomic-mail
+leadmailer

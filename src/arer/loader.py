@@ -16,6 +16,9 @@ from pydantic import ValidationError
 from .config import Config, get_config
 from .models import Email
 
+EMAIL_SUFFIXES = {".eml", ".msg"}
+SCAN_SUFFIXES = EMAIL_SUFFIXES | {".json"}
+
 log = logging.getLogger("phishscope.loader")
 
 
@@ -49,10 +52,44 @@ def load_email(path: str | Path, cfg: Config | None = None) -> Email:
     if not {"envelope", "body"} & raw.keys():
         raise LoadError(f"{p.name}: does not look like parser output (no 'envelope' or 'body')")
 
+    return _build(raw, p.name)
+
+
+def _build(raw: dict, name: str) -> Email:
     try:
         return Email.from_parser_json(raw)
     except ValidationError as e:
-        raise LoadError(f"{p.name}: failed validation ({e.error_count()} errors)") from e
+        raise LoadError(f"{name}: failed validation ({e.error_count()} errors)") from e
+
+
+def load_any(path: str | Path, cfg: Config | None = None, trust: str | None = None) -> Email:
+    """
+    The one call the CLI uses.
+      .json       -> read existing parser output
+      .eml / .msg -> run YOUR mail_parser.parse_mail_file() in memory, no temp file
+    `trust` is the trusted mail-server string that enables routing.sender_ip.
+    """
+    cfg = cfg or get_config()
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix == ".json":
+        return load_email(p, cfg)
+    if suffix not in EMAIL_SUFFIXES:
+        raise LoadError(f"{p.name}: unsupported type '{p.suffix}' (use .eml, .msg or .json)")
+    if not p.is_file():
+        raise LoadError(f"not a file: {p}")
+    max_bytes = cfg.limits.max_eml_mb * 1024 * 1024
+    if p.stat().st_size > max_bytes:
+        raise LoadError(f"{p.name} is {p.stat().st_size / 1e6:.1f} MB, limit is {cfg.limits.max_eml_mb} MB")
+
+    from .mail_parser import parse_mail_file, to_json     # lazy: .json scans never need it
+    try:
+        # payload is embedded only so magic bytes can be read; Attachment.from_raw drops it
+        data = parse_mail_file(p, trust=trust, include_attachment_payload=True)
+        raw = json.loads(to_json(data, None))              # same round-trip as a saved file
+    except Exception as e:                                 # noqa: BLE001 - library errors vary
+        raise LoadError(f"{p.name}: parser failed ({type(e).__name__}: {str(e)[:150]})") from e
+    return _build(raw, p.name)
 
 
 def load_dir(directory: str | Path, cfg: Config | None = None

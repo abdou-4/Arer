@@ -1,0 +1,25 @@
+# brand keywords (lookalike + display-name checks). Add the brands your org cares about.
+paypal
+microsoft
+office365
+outlook
+apple
+amazon
+netflix
+google
+facebook
+instagram
+linkedin
+dhl
+fedex
+ups
+docusign
+dropbox
+bradesco
+itau
+santander
+livelo
+nubank
+chase
+wellsfargo
+bankofamerica

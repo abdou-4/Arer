@@ -18,6 +18,7 @@ classifiers = [
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 dependencies = [
+    "click>=8.1.8",
     "mail-parser>=4.8.0",
     "pydantic>=2.13.5",
     "pytest>=8.4.2",
@@ -30,3 +31,8 @@ arer="arer.cli:main"
 [project.urls]
 Homepage = "https://github.com/abdou-4/Arer"
 Issues = "https://github.com/abdou-4/Arer/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]

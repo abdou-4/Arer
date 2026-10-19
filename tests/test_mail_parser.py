@@ -2,7 +2,7 @@ from pathlib import Path
 
 from arer.mail_parser import parse_mail_file
 
-SAMPLE = Path(__file__).parent.parent / "data" / "samples" / "phish_sample.eml"
+SAMPLE = Path(__file__).parent.parent / "data" / "samples" / "phish" / "phish_sample.eml"
 
 
 def test_eml_core_fields():

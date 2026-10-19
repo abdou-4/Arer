@@ -1,0 +1,10 @@
+# archive extensions
+zip
+rar
+7z
+gz
+tar
+tgz
+bz2
+cab
+ace

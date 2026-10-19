@@ -3,6 +3,7 @@
 
 limits:                     # protection against hostile input
   max_json_mb: 20           # refuse parser JSON bigger than this
+  max_eml_mb: 50            # refuse .eml/.msg bigger than this
   analyzer_timeout_s: 10    # per analyzer (used by pipeline.py)
 
 thresholds:                 # score -> level (score is 0-100)
