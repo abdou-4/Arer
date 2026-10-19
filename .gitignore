@@ -3,4 +3,8 @@ data/samples/*
 !data/samples/phish_sample.eml
 __pycache__/
 .venv/
+.pytest_cache/
+reports/
+data/feeds/
+*.db
 
