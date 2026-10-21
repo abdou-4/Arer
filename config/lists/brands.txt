@@ -1,8 +1,9 @@
-# brand keywords (lookalike + display-name checks). Add the brands your org cares about.
+# Brand KEYWORDS (lowercase, single word). Used for display-name spoofing and lookalike domains.
+# Add the brands that target YOUR users: local banks, postal service, your company, your email provider.
+# Avoid generic words (e.g. "outlook") - they cause false positives.
 paypal
 microsoft
 office365
-outlook
 apple
 amazon
 netflix

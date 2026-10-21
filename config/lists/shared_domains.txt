@@ -1,0 +1,23 @@
+# Domains where ANYONE can register a free name/subdomain. Abused to host phishing or send spam.
+# Used for the sender check and for links. Mail from these gets a finding.
+onmicrosoft.com
+pages.dev
+workers.dev
+netlify.app
+vercel.app
+web.app
+firebaseapp.com
+herokuapp.com
+glitch.me
+weebly.com
+wixsite.com
+github.io
+gitbook.io
+notion.site
+onrender.com
+ngrok.io
+ngrok-free.app
+trycloudflare.com
+r2.dev
+000webhostapp.com
+blogspot.com

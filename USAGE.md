@@ -5,7 +5,7 @@ Local phishing triage. Nothing leaves your machine, and nothing inside an email 
 ## Setup
 
 ```bash
-uv add pydantic pyyaml click        # once
+uv add pydantic pyyaml click tldextract rapidfuzz     # once (HTML and zip reading use the standard library)
 uv add --dev pytest
 ```
 
@@ -106,6 +106,7 @@ Everything adjustable is here. No code changes are needed.
 | `thresholds` | Score cutoffs for SUSPICIOUS, LIKELY_PHISHING and MALICIOUS. |
 | `overrides` | Findings that force a minimum level. |
 | `limits` | Maximum file sizes and analyzer timeout. |
+| `auth` | Which mail server's Authentication-Results to believe (see below). |
 
 A typo in this file stops the program with a clear error instead of silently scoring wrong.
 
@@ -115,13 +116,42 @@ One entry per line, lowercase, `#` for comments. Put the source and date at the 
 
 | File | Used for | Maintain by |
 |---|---|---|
-| `brands.txt` | Display-name spoofing and lookalike domains | Add brands impersonated in your region and organization. Most important list. |
+| `brands.txt` | Display-name spoofing and lookalike domains | One lowercase word per brand. Add brands impersonated in your region and organization. Avoid generic words ("outlook") because they cause false alarms. |
+| `shared_domains.txt` | Domains where anyone can register a free name (`onmicrosoft.com`, `pages.dev`, `github.io`...) | Add more as you see them abused. |
+| `mail_platforms.txt` | Big mail platforms (Google, Microsoft, Amazon SES, Mailchimp...) whose Message-ID and Return-Path are normal | Add senders' ESPs when you see false mismatches. |
+| `urgency_words.txt`, `credential_words.txt`, `generic_greetings.txt` | Phrase lists for the body check (accents and punctuation ignored) | Add phrases in your languages. Inflected forms need their own line (`expira hoje`, `expiram hoje`). |
+| `legit_domains.txt` | Exempts known-good domains from brand and lookalike checks | Add your own company domain, bank and providers. **When a legit email gets flagged, fix it here first.** |
 | `suspicious_tlds.txt` | Links on heavily abused TLDs | Refresh from Spamhaus or Interisle reports. |
 | `executable_ext.txt` | Dangerous attachment types | Start from Microsoft's blocked-attachments list. |
 | `macro_ext.txt`, `archive_ext.txt` | Macro-capable Office files and archives | Rarely changes. |
 | `shorteners.txt` | Hidden link destinations | Community lists on GitHub. |
 | `free_mail.txt` | A "bank" writing from gmail.com | Community freemail lists. |
 | `bad_mailers.txt` | Mass-mailer tools in `X-Mailer` | Build from your own phishing samples. Weakest list. |
+
+## What the checks look at
+
+| Analyzer | Finds |
+|---|---|
+| `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. |
+| `sender` | Malformed From, Reply-To pointing elsewhere, display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`. |
+| `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
+
+| `urls` | Static link checks only (nothing is ever fetched): link text vs real destination, bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
+| `attachments` | Executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
+| `body` | Pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, hidden or zero-width text, image-only messages. |
+
+Some checks are deliberately softer for newsletters (mail with a List-Unsubscribe header), because legitimate bulk senders often use other domains. In the report, a finding's points are its weight multiplied by its confidence.
+
+### Which Authentication-Results to trust
+
+Anyone can forge an `Authentication-Results` line inside an email. Only the stamp added by your own receiving server is believable. By default `arer` trusts only the topmost one, which your server added last. To be stricter, name your server in `config/rules.yaml`:
+
+```yaml
+auth:
+  trusted_authserv_ids: ["mx.google.com"]    # Gmail. Microsoft stamps have no server name, so leave it empty.
+```
+
+If a server is named but no matching stamp exists, the result is `auth.results_missing` instead of a forged "pass". `temperror` and `permerror` mean "could not check" and are not counted as failures.
 
 ## Adding a check
 
@@ -142,7 +172,7 @@ class Example(Analyzer):
         return out
 ```
 
-Then make sure the finding id has a weight in `rules.yaml`. When you write real `auth.py`, `sender.py` and `headers.py`, delete the matching checks in `analyzers/demo.py` so signals are not counted twice.
+Then make sure the finding id has a weight in `rules.yaml`. Keep one check per signal, because two analyzers reporting the same thing would double-count it.
 
 ## Safety notes
 
@@ -165,5 +195,6 @@ uv run pytest
 | `parser failed (...)` | The file is malformed or not an email. Try `arer parse` on it and check the error. |
 | `.msg` files fail | Install the extra: `uv add "mail-parser[outlook]"`. |
 | `does not look like parser output` | You pointed `scan` at a JSON that is not from `arer parse` (a report, for example). |
+| Legit email flagged as brand spoof or lookalike | Add its domain to `legit_domains.txt`. |
 | `finding id ... has no weight` (warning) | A finding id is missing or misspelled in `rules.yaml`. |
 | `INSUFFICIENT_DATA` on a real email | The sender or the whole body is missing from the parsed output. |

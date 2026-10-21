@@ -6,6 +6,12 @@ limits:                     # protection against hostile input
   max_eml_mb: 50            # refuse .eml/.msg bigger than this
   analyzer_timeout_s: 10    # per analyzer (used by pipeline.py)
 
+auth:
+  # Authentication-Results can be forged by the attacker. Only believe the stamp added by
+  # YOUR receiving server. Empty = trust only the topmost header (normally yours).
+  # Or name the server, e.g. ["mx.google.com"] for Gmail.
+  trusted_authserv_ids: []
+
 thresholds:                 # score -> level (score is 0-100)
   suspicious: 20
   likely_phishing: 45
@@ -38,6 +44,7 @@ weights:
   sender.no_mx: 5
   sender.lookalike_domain: 15
   sender.punycode_domain: 8
+  sender.shared_domain: 8
 
   # ---- headers ----
   headers.missing_received: 5
@@ -60,6 +67,8 @@ weights:
   url.login_keywords: 5
   url.not_https: 3
   url.lookalike_domain: 15
+  url.free_hosting: 6
+  url.brand_mismatch: 15
 
   # ---- attachment ----
   attachment.executable: 15
@@ -68,6 +77,7 @@ weights:
   attachment.archive_with_exe: 12
   attachment.magic_mismatch: 10
   attachment.html_or_svg: 10
+  attachment.encrypted_archive: 8
   attachment.known_malicious_hash: 40
 
   # ---- body ----
