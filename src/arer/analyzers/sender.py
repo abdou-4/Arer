@@ -17,6 +17,9 @@ from .base import Analyzer, register
 ADDR_RE = re.compile(r"^[A-Za-z0-9._%+'\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+$")
 ANY_EMAIL = re.compile(r"[\w.+'\-]+@[\w\-]+(?:\.[\w\-]+)+")
 # words that make "brand in display name" much more suspicious
+OFFICIAL = {"support", "security", "billing", "helpdesk", "admin", "administrator", "verification", "official",
+            "payment", "payments", "accounts", "customercare", "helpline", "hotline", "compliance", "fraud",
+            "refund", "refunds"}
 SENSITIVE = {"support", "security", "service", "services", "team", "account", "accounts", "alert",
              "alerts", "billing", "verification", "verify", "admin", "helpdesk", "help", "notification",
              "noreply", "customer", "care", "official", "payment", "payments", "login", "update"}
@@ -61,9 +64,14 @@ class Sender(Analyzer):
                     display_name=name[:100], shown_address=fake, from_domain=a.domain))
                 break
         else:
-            words = set(re.findall(r"[a-z0-9]+", name.lower()))
-            hit = sorted(b for b in brands if b in words)
+            tokens = re.findall(r"[a-z0-9]+", name.lower())
+            words, padded = set(tokens), f" {' '.join(tokens)} "
+            hit = sorted(b for b in brands if f" {b} " in padded)      # also matches two-word brands ("geek squad")
             is_free = from_reg in free or a.domain in free      # gmail.com is "legit" but never speaks for a brand
+            if not hit and is_free and words & OFFICIAL:
+                out.append(self.finding(
+                    "sender.freemail_brand", f"Free-mail address ({a.domain}) uses an official-sounding name: {name[:60]}",
+                    0.6, display_name=name[:100], from_domain=a.domain))
             if hit and (is_free or from_reg not in legit) and not any(
                     normalize_confusables(b) in normalize_confusables(from_label) for b in hit):
                 strong = bool(words & SENSITIVE) or any(len(b) >= 6 for b in hit)

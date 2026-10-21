@@ -1,0 +1,25 @@
+# Phrases typical of callback ("call this number") scams. Need ALL of: phone number + amount + one of these.
+did not authorize
+did not authorise
+not authorize
+unauthorized
+unauthorised
+contact our
+call us
+call our
+hotline
+helpline
+support team
+customer support
+toll free
+cancel your subscription
+refund
+billing department
+dispute this
+contactez notre
+appelez
+ligne d assistance
+ligue para
+central de atendimento
+llame al
+linea de atencion

@@ -53,13 +53,18 @@ class Urls(Analyzer):
             u = u.strip().rstrip(".,;:!?")
             if u.lower().startswith(("http://", "https://")) and u not in urls and len(urls) < MAX_URLS:
                 urls.append(u)
-        if info:
+        if info:                                           # clickable links, form targets, URLs shown as text
             for href, _ in info.links:
                 add(href)
+            for form in info.forms:
+                add(form["action"])
+            for u in URL_IN_TEXT.findall(info.visible_text):
+                add(u)
         for u in URL_IN_TEXT.findall(email.body_text):
             add(u)
-        for u in email.indicators.urls:
-            add(u)
+        if not info and not email.body_text:               # last resort. Raw-HTML URLs (xmlns, DTDs) are NOT links
+            for u in email.indicators.urls:
+                add(u)
 
         hits: dict[str, dict] = {}
         def hit(fid, conf, summary, url):

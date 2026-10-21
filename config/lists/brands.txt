@@ -24,3 +24,15 @@ nubank
 chase
 wellsfargo
 bankofamerica
+# two-word brands are allowed (matched in the display name)
+geek squad
+norton
+mcafee
+best buy
+lifelock
+avast
+quickbooks
+intuit
+coinbase
+binance
+metamask

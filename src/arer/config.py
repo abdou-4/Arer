@@ -36,6 +36,7 @@ LIST_FILES = {
     "urgency_words": "urgency_words.txt",
     "credential_words": "credential_words.txt",
     "generic_greetings": "generic_greetings.txt",
+    "callback_words": "callback_words.txt",
 }
 
 

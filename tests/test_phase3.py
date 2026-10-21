@@ -158,7 +158,7 @@ def test_body_password_form():
 def test_body_hidden_text_and_bulk_weakening():
     hidden = '<div style="display:none">' + "preheader " * 30 + "</div><p>Hello there</p>"
     assert ids(Body(), mk(html=hidden))["body.hidden_text"].confidence == 0.8
-    assert ids(Body(), mk(html=hidden, bulk=True))["body.hidden_text"].confidence == 0.4
+    assert ids(Body(), mk(html=hidden, bulk=True))["body.hidden_text"].confidence == 0.2
 
 def test_body_white_text_counts_as_hidden():
     html = '<p style="color:#ffffff">' + "viagra " * 30 + "</p><p>Visible</p>"
@@ -197,3 +197,53 @@ def test_googleapis_is_not_a_google_lookalike():
 def test_body_apostrophes_and_portuguese_inflections():
     assert "body.urgency_words" in ids(Body(), mk(text="Votre offre expire aujourd'hui"))
     assert "body.urgency_words" in ids(Body(), mk(text="Pontos que expiram HOJE, Resgatar Agora"))
+
+
+# ------------------ sample-5 pattern: callback scam, no links/attachments ---- #
+S5 = ("Dear phishing@pot, This is an automated notification. Service Type: Premium Security Plan. Amount: $370.3. "
+      "If you did not authorize this activity, please contact our security support team immediately. "
+      "24/7 Security Support Hotline (813) 543 3428. Case ID: #33897467193")
+
+def test_callback_lure_fires_on_sample5_pattern():
+    r = ids(Body(), mk(html=f"<div>{S5}</div>"))
+    assert r["body.callback_lure"].confidence == 0.9
+    assert r["body.callback_lure"].evidence["phone"] == "(813) 543 3428"
+    assert "body.generic_greeting" in r                              # "Dear <your e-mail address>"
+
+def test_callback_lure_needs_phone_and_amount_and_call_words():
+    assert "body.callback_lure" not in ids(Body(), mk(text="Call us at (813) 543 3428 for details."))
+    assert "body.callback_lure" not in ids(Body(), mk(text="Amount: $370. Contact our support team."))
+
+def test_plain_case_id_is_not_a_phone_number():
+    assert "body.callback_lure" not in ids(Body(), mk(text="Amount $50. Contact our team. Case 33897467193"))
+
+def test_callback_lure_softer_from_legit_sender():
+    r = ids(Body(), mk(frm="billing@paypal.com", text=S5))
+    assert r["body.callback_lure"].confidence < 0.5
+
+def test_see_attached_but_nothing_attached():
+    e = mk(subject="Review Requested: See Attached Transaction Document", text="hello")
+    assert ids(Attachments(), e)["attachment.promised_missing"].confidence == 0.8
+    assert ids(Attachments(), mk(subject="Re: See attached", text="x"))["attachment.promised_missing"].confidence == 0.4
+
+def test_see_attached_with_real_attachment_is_fine():
+    e = mk(subject="See attached", atts=[att("report.pdf", b"%PDF-1.7" + b"0" * 40)])
+    assert "attachment.promised_missing" not in ids(Attachments(), e)
+
+def test_freemail_two_word_brand_and_official_name():
+    assert ids(Sender(), mk(name="Geek Squad Service", frm="x@gmail.com"))["sender.freemail_brand"].confidence == 1.0
+    assert ids(Sender(), mk(name="Security Team", frm="x@gmail.com"))["sender.freemail_brand"].confidence == 0.6
+    assert ids(Sender(), mk(name="Sam Support", frm="sam@company.org")) == {}
+
+def test_xml_namespace_is_not_a_link():
+    e = mk(html='<html xmlns="http://www.w3.org/1999/xhtml"><p>hello</p></html>')
+    e.indicators.urls = ["http://www.w3.org/1999/xhtml"]
+    assert ids(Urls(), e) == {}
+
+def test_huge_hidden_gibberish_is_full_confidence_even_in_bulk():
+    html = '<p>Hi</p><div style="display:none">' + "xQ7kP2" * 1500 + "</div>"
+    assert ids(Body(), mk(html=html, bulk=True))["body.hidden_text"].confidence == 1.0
+
+
+def test_callback_lure_is_not_softened_for_gmail_senders():
+    assert ids(Body(), mk(frm="x@gmail.com", text=S5))["body.callback_lure"].confidence == 0.9

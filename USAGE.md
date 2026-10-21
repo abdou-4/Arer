@@ -16,11 +16,12 @@ uv add --dev pytest
 arer = "arer.cli:main"
 ```
 
-## The two commands
+## The commands
 
 ```bash
 arer parse <file-or-folder>     # .eml/.msg  ->  JSON files        (your original tool)
 arer scan  <file-or-folder>...  # .eml/.msg/.json  ->  verdict     (parse + analyze in one step)
+arer eval  [data/samples]       # score ALL labeled samples, report detection and false alarms
 ```
 
 `scan` parses in memory, so for daily use you only need `scan`. Use `parse` when you want the JSON on disk.
@@ -95,6 +96,37 @@ Findings
 arer scan data/samples/phish -q || echo "phishing found or error"
 ```
 
+## Measuring: `arer eval`
+
+Tuning weights by feel does not work. `arer eval` scores every sample and tells you what the numbers are.
+
+```bash
+arer eval                      # everything under data/samples
+arer eval --details            # also list every sample with its score
+arer eval --only dev           # tune on 80% of samples ...
+arer eval --only test          # ... and check on the other 20% now and then
+arer eval --skip body          # what happens if an analyzer is turned off?
+arer eval --config /tmp/cfg    # try a copy of config/ with different weights
+```
+
+Labels come from folders: files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`:
+
+```
+filename,label
+sample-9.eml,legit
+```
+
+What it shows:
+
+| Section | Use it to |
+|---|---|
+| Detection by level | See how many phishing emails reach SUSPICIOUS / LIKELY_PHISHING / MALICIOUS, and how many legit emails are wrongly flagged at each level. |
+| Phishing MISSED / Legit FLAGGED | Open the exact emails that need work. |
+| Score sweep | Pick thresholds: choose the T that catches the most phishing before legit mail starts getting flagged. |
+| Findings table | See which findings help (fire on phishing) and which are noisy (marked `<- noisy`, fire on legit mail). Lower the weight of noisy ones in `rules.yaml`. |
+
+The workflow: run `arer eval`, change one thing in `rules.yaml` or a list, run it again, and keep the change only if detection went up without more false alarms. Below about 30 samples per class the numbers are only a rough guide. Public sets (Phishing Pot, SpamAssassin) are in the earlier notes.
+
 ## Tuning: `config/rules.yaml`
 
 Everything adjustable is here. No code changes are needed.
@@ -119,6 +151,7 @@ One entry per line, lowercase, `#` for comments. Put the source and date at the 
 | `brands.txt` | Display-name spoofing and lookalike domains | One lowercase word per brand. Add brands impersonated in your region and organization. Avoid generic words ("outlook") because they cause false alarms. |
 | `shared_domains.txt` | Domains where anyone can register a free name (`onmicrosoft.com`, `pages.dev`, `github.io`...) | Add more as you see them abused. |
 | `mail_platforms.txt` | Big mail platforms (Google, Microsoft, Amazon SES, Mailchimp...) whose Message-ID and Return-Path are normal | Add senders' ESPs when you see false mismatches. |
+| `callback_words.txt` | Phrases for the callback-scam check. It needs a phone number AND an amount AND one of these | Add phrases in your languages. |
 | `urgency_words.txt`, `credential_words.txt`, `generic_greetings.txt` | Phrase lists for the body check (accents and punctuation ignored) | Add phrases in your languages. Inflected forms need their own line (`expira hoje`, `expiram hoje`). |
 | `legit_domains.txt` | Exempts known-good domains from brand and lookalike checks | Add your own company domain, bank and providers. **When a legit email gets flagged, fix it here first.** |
 | `suspicious_tlds.txt` | Links on heavily abused TLDs | Refresh from Spamhaus or Interisle reports. |
@@ -133,12 +166,12 @@ One entry per line, lowercase, `#` for comments. Put the source and date at the 
 | Analyzer | Finds |
 |---|---|
 | `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. |
-| `sender` | Malformed From, Reply-To pointing elsewhere, display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`. |
+| `sender` | Malformed From, Reply-To pointing elsewhere, display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
 | `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
 
 | `urls` | Static link checks only (nothing is ever fetched): link text vs real destination, bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
-| `attachments` | Executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
-| `body` | Pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, hidden or zero-width text, image-only messages. |
+| `attachments` | A message that says "see attached" but has no attachment, executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
+| `body` | Callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, hidden or zero-width text, image-only messages. |
 
 Some checks are deliberately softer for newsletters (mail with a List-Unsubscribe header), because legitimate bulk senders often use other domains. In the report, a finding's points are its weight multiplied by its confidence.
 

@@ -21,6 +21,15 @@ EXPECT = {"pdf": {"pdf"}, "png": {"png"}, "jpg": {"jpeg"}, "jpeg": {"jpeg"}, "gi
           "xlsm": {"zip"}, "rar": {"rar"}, "7z": {"7z"},
           "doc": {"ole", "rtf", "zip"}, "xls": {"ole", "zip"}, "ppt": {"ole", "zip"}}
 REAL_EXEC = {"mz", "elf"}
+PROMISE = re.compile(
+    r"(?<!\w)(?:see attached|attached (?:is|are|please|document|file|invoice|report|statement)|please find attached|"
+    r"find attached|piece jointe|ci joint|veuillez trouver ci joint|em anexo|segue anexo|anexado|adjunto|se adjunta)(?!\w)")
+
+
+def _fold(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s.lower())
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", "".join(c for c in s if not unicodedata.combining(c))))
 
 
 def exts_of(filename: str) -> list[str]:
@@ -45,6 +54,23 @@ class Attachments(Analyzer):
                 h["conf"], h["summary"] = conf, summary
             if len(h["items"]) < 5:
                 h["items"].append({"filename": a.filename[:100], "sha256": a.sha256, "size": a.size_bytes, **extra})
+
+        # "see attached ..." but there is nothing attached
+        real = [a for a in email.attachments if "inline" not in a.content_disposition.lower()]
+        if not real:
+            from ..util.html import parse_html
+            info = parse_html(email.body_html) if email.body_html else None
+            blob = _fold(f"{email.envelope.subject} {email.body_text} {info.visible_text if info else ''}"[:50_000])
+            m = PROMISE.search(blob)
+            if m:
+                reply = email.envelope.subject.strip().lower().startswith(("re:", "fw:", "fwd:", "tr:", "rv:"))
+                out_promise = self.finding(
+                    "attachment.promised_missing", f"Message refers to an attachment ('{m.group()}') but has none",
+                    0.4 if reply else 0.8, phrase=m.group(), subject=email.envelope.subject[:100])
+            else:
+                out_promise = None
+        else:
+            out_promise = None
 
         for a in email.attachments:
             exts = exts_of(a.filename) or ([a.extension.lstrip(".")] if a.extension else [])
@@ -85,5 +111,6 @@ class Attachments(Analyzer):
                 hit("attachment.magic_mismatch", 1.0 if a.sniffed in REAL_EXEC else 0.7,
                     f"Named .{last} but the content is {a.sniffed}", a, real_type=a.sniffed)
 
-        return [self.finding(fid, h["summary"], h["conf"], attachments=h["items"])
-                for fid, h in sorted(hits.items())]
+        found = [self.finding(fid, h["summary"], h["conf"], attachments=h["items"])
+                 for fid, h in sorted(hits.items())]
+        return found + ([out_promise] if out_promise else [])
