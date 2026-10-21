@@ -78,6 +78,7 @@ weights:
   attachment.magic_mismatch: 10
   attachment.html_or_svg: 10
   attachment.encrypted_archive: 8
+  attachment.promised_missing: 8
   attachment.known_malicious_hash: 40
 
   # ---- body ----
@@ -87,6 +88,7 @@ weights:
   body.password_form: 12
   body.image_only: 5
   body.generic_greeting: 3
+  body.callback_lure: 15
 
   # ---- ai (later; keep small until validated) ----
   ai.text_classifier: 10

@@ -62,3 +62,14 @@ microsoftonline-p.com
 amazon-adsystem.com
 amazontrust.com
 paypal-community.com
+norton.com
+mcafee.com
+bestbuy.com
+geeksquad.com
+lifelock.com
+avast.com
+quickbooks.com
+intuit.com
+coinbase.com
+binance.com
+metamask.io
