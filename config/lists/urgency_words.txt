@@ -1,0 +1,48 @@
+# Urgency / pressure phrases (lowercase). Matched as whole words, accents ignored.
+urgent
+immediately
+act now
+action required
+immediate action
+within 24 hours
+within 48 hours
+expires today
+will expire
+last chance
+final notice
+final warning
+suspended
+will be suspended
+will be closed
+avoid suspension
+limited time
+as soon as possible
+account will be
+urgente
+immediatement
+dernier rappel
+avant suspension
+action requise
+dans les 24 heures
+expire aujourd hui
+imediatamente
+expirando
+ultimo aviso
+acao necessaria
+inmediatamente
+ultima oportunidad
+su cuenta sera
+عاجل
+expiram hoje
+expira hoje
+resgatar agora
+resgate agora
+nao perca
+evite perder
+claim now
+act fast
+expire aujourd hui
+expire demain
+derniere chance
+agissez maintenant
+لا تفوت

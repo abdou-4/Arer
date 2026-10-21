@@ -185,9 +185,9 @@ class Body(_Base):
 
 class Attachment(_Base):
     """
-    One attachment, as written by mail_parser._attachments(). Metadata and hashes
-    only. The raw content is never kept: from_raw() reads the first 16 bytes
-    (if the parser embedded the payload) into `magic_hex`, then drops the rest.
+    One attachment, as written by mail_parser._attachments(). Metadata and hashes only.
+    If the parser embedded the payload, from_raw() inspects it once (file type from the
+    first bytes, zip member names) and then DROPS it. Content is never kept or run.
     """
     filename: str = ""
     extension: str = ""                 # lower-case, with dot: ".pdf"
@@ -200,11 +200,15 @@ class Attachment(_Base):
     sha256: str = ""
     is_binary: bool = False
     magic_hex: str = ""                 # first 16 bytes as hex, "" if unknown
+    sniffed: str = ""                   # real type from the bytes: pdf, zip, mz, ole ... ("" unknown)
+    members: list[str] = Field(default_factory=list)   # file names inside a zip
+    encrypted: bool = False             # zip with password-protected entries
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Attachment":
         raw = raw or {}
         h = raw.get("hashes") or {}
+        head, sniffed, members, encrypted = _inspect(raw)
         return cls(
             filename=_s(raw.get("filename"))[:500],
             extension=_s(raw.get("extension")).lower()[:20],
@@ -214,24 +218,33 @@ class Attachment(_Base):
             size_bytes=raw.get("size_bytes") or 0,
             md5=_s(h.get("md5")), sha1=_s(h.get("sha1")), sha256=_s(h.get("sha256")),
             is_binary=bool(raw.get("is_binary")),
-            magic_hex=_magic(raw),
+            magic_hex=head.hex(), sniffed=sniffed, members=members, encrypted=encrypted,
         )
 
 
-def _magic(raw: dict) -> str:
-    """First 16 bytes of the attachment as hex, from the embedded payload if present."""
+_MAX_PAYLOAD_CHARS = 60_000_000
+
+
+def _inspect(raw: dict) -> tuple[bytes, str, list[str], bool]:
+    """(first 16 bytes, sniffed type, zip members, zip encrypted) from the embedded payload."""
     payload = raw.get("payload")
     if not payload or not isinstance(payload, str):
-        return ""
+        return b"", "", [], False
+    import base64
+    from .util.files import sniff, zip_members
+    binary = bool(raw.get("is_binary"))
     try:
-        if raw.get("is_binary"):
-            import base64
-            head = base64.b64decode(payload[:32], validate=False)[:16]   # 32 b64 chars = 24 bytes
-        else:
-            head = payload[:16].encode("utf-8", errors="replace")[:16]
+        head = base64.b64decode(payload[:64], validate=False)[:16] if binary else payload[:16].encode("utf-8", "replace")[:16]
     except Exception:                                                     # noqa: BLE001
-        return ""
-    return head.hex()
+        return b"", "", [], False
+    kind = sniff(head) if binary else ""          # text attachments are never "executables" by magic
+    members, enc = [], False
+    if kind == "zip" and len(payload) <= _MAX_PAYLOAD_CHARS:
+        try:
+            members, enc = zip_members(base64.b64decode(payload, validate=False))
+        except Exception:                                                 # noqa: BLE001
+            pass
+    return head, kind, members, enc
 
 
 class Defects(_Base):
@@ -323,6 +336,11 @@ class Email(_Base):
     @property
     def body_text(self) -> str:
         return "\n".join(self.body.text_plain)
+
+    @property
+    def is_bulk(self) -> bool:
+        """Looks like a newsletter / bulk mail (has List-Unsubscribe). Weakens some mismatch checks."""
+        return "list-unsubscribe" in self.headers.security
 
     @property
     def is_partial(self) -> bool:

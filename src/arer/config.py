@@ -30,6 +30,12 @@ LIST_FILES = {
     "free_mail": "free_mail.txt",
     "brands": "brands.txt",
     "bad_mailers": "bad_mailers.txt",
+    "legit_domains": "legit_domains.txt",
+    "shared_domains": "shared_domains.txt",
+    "mail_platforms": "mail_platforms.txt",
+    "urgency_words": "urgency_words.txt",
+    "credential_words": "credential_words.txt",
+    "generic_greetings": "generic_greetings.txt",
 }
 
 
@@ -55,6 +61,12 @@ class Thresholds(BaseModel):
         return self
 
 
+class AuthSettings(BaseModel):
+    # Which mail server's Authentication-Results header to believe.
+    # Empty list = trust only the topmost header (the one added by YOUR receiving server).
+    trusted_authserv_ids: list[str] = Field(default_factory=list)
+
+
 class Override(BaseModel):
     finding: str
     min_level: Level
@@ -63,6 +75,7 @@ class Override(BaseModel):
 class Config(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     thresholds: Thresholds = Field(default_factory=Thresholds)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
     caps: dict[str, int]
     weights: dict[str, int]
     overrides: list[Override] = Field(default_factory=list)

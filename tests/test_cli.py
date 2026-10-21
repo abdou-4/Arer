@@ -36,9 +36,21 @@ def test_load_any_rejects_unknown_type(tmp_path):
         load_any(f)
 
 
-def test_scan_eml_flags_reply_to(eml):
+def test_scan_eml_flags_phishing_and_exits_2(eml):
     r = CliRunner().invoke(main, ["scan", str(eml)])
-    assert r.exit_code == 0 and "sender.reply_to_mismatch" in r.output
+    assert r.exit_code == 2                                   # LIKELY_PHISHING / MALICIOUS -> 2
+    for finding in ("sender.reply_to_mismatch", "attachment.executable", "url.ip_host"):
+        assert finding in r.output
+
+
+def test_scan_clean_eml_exits_0(tmp_path):
+    m = EmailMessage()
+    m["From"] = "Sam <sam@example.org>"; m["To"] = "me@example.org"; m["Subject"] = "Lunch"
+    m["Date"] = "Mon, 05 Jan 2026 09:00:00 +0000"; m["Message-ID"] = "<1@example.org>"
+    m.set_content("Hi, lunch on Friday?")
+    f = tmp_path / "ok.eml"; f.write_bytes(m.as_bytes())
+    r = CliRunner().invoke(main, ["scan", str(f), "-q"])
+    assert r.exit_code == 0 and "ok.eml" in r.output
 
 
 def test_parse_then_scan_json(eml, tmp_path):
@@ -46,7 +58,7 @@ def test_parse_then_scan_json(eml, tmp_path):
     r = CliRunner().invoke(main, ["parse", str(eml), "-o", str(out)])
     assert r.exit_code == 0 and (out / "phish.eml.json").is_file()
     r = CliRunner().invoke(main, ["scan", str(out / "phish.eml.json"), "-q"])
-    assert r.exit_code == 0 and "phish.eml.json" in r.output
+    assert r.exit_code == 2 and "phish.eml.json" in r.output
 
 
 def test_scan_folder_writes_reports_and_skips_them(eml, tmp_path):
@@ -65,4 +77,4 @@ def test_json_flag_rejects_many(eml, tmp_path):
 def test_bad_file_does_not_stop_batch(eml, tmp_path):
     bad = tmp_path / "bad.json"; bad.write_text("{nope")
     r = CliRunner().invoke(main, ["scan", str(bad), str(eml), "-q"])
-    assert "phish.eml" in r.output and r.exit_code == 1
+    assert "phish.eml" in r.output and r.exit_code == 2     # phishing found outranks the failed file
