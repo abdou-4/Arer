@@ -43,7 +43,7 @@ class Headers(Analyzer):
             if mid and registrable(mid) not in platforms:
                 if not has_public_suffix(mid):
                     out.append(self.finding(
-                        "headers.msgid_domain_mismatch",
+                        "headers.msgid_bare_host",
                         f"Message-ID uses a bare host name ({mid[:60]}), not a real domain",
                         0.8, message_id_domain=mid[:100], from_domain=email.from_domain))
                 elif registrable(mid) != from_reg:

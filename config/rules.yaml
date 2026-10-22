@@ -50,8 +50,9 @@ weights:
   headers.missing_received: 5
   headers.high_hop_count: 3
   headers.suspicious_mailer: 5
-  headers.msgid_domain_mismatch: 5
-  headers.returnpath_mismatch: 5
+  headers.msgid_domain_mismatch: 2
+  headers.msgid_bare_host: 6
+  headers.returnpath_mismatch: 2
   headers.missing_date: 2
   headers.parser_defects: 3
 
@@ -65,7 +66,7 @@ weights:
   url.many_subdomains: 8
   url.punycode: 8
   url.login_keywords: 5
-  url.not_https: 3
+  url.not_https: 2
   url.lookalike_domain: 15
   url.free_hosting: 6
   url.brand_mismatch: 15

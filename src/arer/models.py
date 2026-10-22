@@ -339,7 +339,16 @@ class Email(_Base):
 
     @property
     def is_bulk(self) -> bool:
-        """Looks like a newsletter / bulk mail (has List-Unsubscribe). Weakens some mismatch checks."""
+        """Newsletter or mailing-list mail (List-Unsubscribe, List-Id, Precedence: bulk...). Weakens mismatch checks,
+        because lists and bulk senders legitimately use other domains for Reply-To, Message-ID and Return-Path."""
+        for pair in self.headers.raw_ordered:
+            if len(pair) < 2:
+                continue
+            name, value = pair[0].lower(), pair[1].strip().lower()
+            if name in ("list-unsubscribe", "list-id", "list-post", "mailing-list", "x-mailing-list"):
+                return True
+            if name == "precedence" and value in ("bulk", "list", "junk"):
+                return True
         return "list-unsubscribe" in self.headers.security
 
     @property

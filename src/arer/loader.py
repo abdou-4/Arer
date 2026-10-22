@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -20,6 +21,31 @@ EMAIL_SUFFIXES = {".eml", ".msg"}
 SCAN_SUFFIXES = EMAIL_SUFFIXES | {".json"}
 
 log = logging.getLogger("phishscope.loader")
+
+_HEADER_LINE = re.compile(rb"^(?:From |[A-Za-z][A-Za-z0-9\-]{1,40}:)")
+_NOT_MAIL = {".txt", ".csv", ".md", ".py", ".sh", ".yaml", ".yml", ".zip", ".gz", ".bz2", ".tar", ".tgz",
+             ".7z", ".rar", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".db", ".log", ".cfg", ".toml"}
+
+
+def looks_like_mail(path: Path) -> bool:
+    """True if the first line looks like an e-mail header. Lets us read files named like 00001.7c53... (no .eml)."""
+    try:
+        with Path(path).open("rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    first = head.lstrip(b"\r\n").split(b"\n", 1)[0]
+    return bool(_HEADER_LINE.match(first))
+
+
+def is_mail_candidate(p: Path) -> bool:
+    """A file worth scanning: known extension, or an extension-less/odd-named file that looks like mail."""
+    if not p.is_file() or p.is_symlink() or p.name.startswith(".") or p.name.endswith(".report.json"):
+        return False
+    s = p.suffix.lower()
+    if s in SCAN_SUFFIXES:
+        return True
+    return s not in _NOT_MAIL and p.name != "labels.csv" and looks_like_mail(p)
 
 
 class LoadError(Exception):
@@ -74,7 +100,7 @@ def load_any(path: str | Path, cfg: Config | None = None, trust: str | None = No
     suffix = p.suffix.lower()
     if suffix == ".json":
         return load_email(p, cfg)
-    if suffix not in EMAIL_SUFFIXES:
+    if suffix not in EMAIL_SUFFIXES and not (suffix not in _NOT_MAIL and p.is_file() and looks_like_mail(p)):
         raise LoadError(f"{p.name}: unsupported type '{p.suffix}' (use .eml, .msg or .json)")
     if not p.is_file():
         raise LoadError(f"not a file: {p}")

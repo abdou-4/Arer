@@ -127,6 +127,36 @@ What it shows:
 
 The workflow: run `arer eval`, change one thing in `rules.yaml` or a list, run it again, and keep the change only if detection went up without more false alarms. Below about 30 samples per class the numbers are only a rough guide. Public sets (Phishing Pot, SpamAssassin) are in the earlier notes.
 
+## Building a trustworthy test set
+
+`arer eval` is only as honest as its samples. Four traps to avoid:
+
+1. **Spam is not legitimate mail, and spam is not phishing.** From the SpamAssassin corpus use only `easy_ham`, `easy_ham_2` and `hard_ham` as `legit/`. Put the `spam` folders in `data/samples/spam/`. Eval ignores that folder.
+2. **Era bias.** SpamAssassin mail is from 2002-2003 and has no SPF/DKIM/DMARC results, while modern phishing has them. Findings like `auth.results_missing` then separate your classes by *year*, not by phishing. The fix is modern legitimate mail (next section). Until you have it, compare with `arer eval --skip auth --skip headers` to see the content checks without era effects.
+3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many samples, and the dev/test split can leak. Judge by campaigns, not by counts.
+4. **Too little modern legit mail.** Aim for 40 or more of your own recent emails, including newsletters, receipts, notifications and mailing lists.
+
+### Getting your own legitimate mail
+
+```bash
+# 1. Gmail: takeout.google.com -> deselect all -> Mail -> only the Inbox label -> export (an .mbox file)
+# 2. Sample it:
+python scripts/mbox_to_eml.py "Inbox.mbox" -o data/samples/legit --count 60 --prefix mine
+```
+
+It picks random Inbox messages, skips Spam, Trash, Drafts and Sent (sent mail has no receiving-server stamp), writes `mine_0001.eml` and so on, and never exports the same message twice, so you can run it again to add more. Your real mail is private: add `data/samples/legit/mine_*` to `.gitignore`.
+
+### The workflow that keeps tuning honest
+
+```bash
+uv run arer eval > docs/eval-baseline.txt     # 1. record where you are
+# 2. change ONE thing (a weight, a list entry, a rule)
+uv run arer eval > docs/eval-after.txt        # 3. run it again
+diff docs/eval-baseline.txt docs/eval-after.txt
+```
+
+Keep a change only if detection rose without more false alarms. Tune against `--only dev`, and look at `--only test` only now and then. `scan` and `eval` also read mail files without an `.eml` extension, such as `00001.7c53...`, if the first line looks like a mail header.
+
 ## Tuning: `config/rules.yaml`
 
 Everything adjustable is here. No code changes are needed.
@@ -226,6 +256,7 @@ uv run pytest
 |---|---|
 | `rules.yaml not found` | Run from the project root, or set `PHISHSCOPE_CONFIG=/path/to/config`. |
 | `parser failed (...)` | The file is malformed or not an email. Try `arer parse` on it and check the error. |
+| Hundreds of `WARNING mailparser.core: ... 'calendar'` lines | Harmless calendar invites. They are now hidden unless you use `-v`. |
 | `.msg` files fail | Install the extra: `uv add "mail-parser[outlook]"`. |
 | `does not look like parser output` | You pointed `scan` at a JSON that is not from `arer parse` (a report, for example). |
 | Legit email flagged as brand spoof or lookalike | Add its domain to `legit_domains.txt`. |
