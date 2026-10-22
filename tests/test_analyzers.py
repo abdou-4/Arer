@@ -146,7 +146,7 @@ def test_headers_clean():
 
 def test_headers_bare_hostname_message_id():                  # your sample-1 pattern
     r = ids(Headers(), mk(msgid="<abc@ubuntu-s-1vcpu-1gb-35gb>", return_path="<x@ubuntu-s-1vcpu-1gb-35gb>"))
-    assert r["headers.msgid_domain_mismatch"] == 0.8 and "headers.returnpath_mismatch" in r
+    assert r["headers.msgid_bare_host"] == 0.8 and "headers.returnpath_mismatch" in r
 
 def test_headers_bulk_lowers_confidence():
     r = ids(Headers(), mk(msgid="<1@esp.net>", return_path="<b@esp.net>", bulk=True))

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
-from .loader import SCAN_SUFFIXES, LoadError, load_any
+from .loader import LoadError, is_mail_candidate, load_any
 from .models import Level, Verdict
 from .pipeline import run_pipeline
 from .util.defang import safe_text
@@ -78,9 +78,7 @@ def _read_overrides(root: Path) -> dict[str, str]:
 
 def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None = None) -> Evaluation:
     overrides = _read_overrides(root)
-    files = sorted(p for p in root.rglob("*")
-                   if p.is_file() and not p.is_symlink() and p.suffix.lower() in SCAN_SUFFIXES
-                   and not p.name.endswith(".report.json"))
+    files = sorted(p for p in root.rglob("*") if is_mail_candidate(p))
     ev = Evaluation([], [])
     seen: set[str] = set()
     for p in files:

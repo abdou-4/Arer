@@ -32,9 +32,16 @@ class Sender(Analyzer):
     def run(self, email: Email, cfg):
         out = []
         a = email.from_addr
-        if a is None or not ADDR_RE.match(a.address or ""):
-            out.append(self.finding("sender.invalid_format", "From address is missing or malformed",
-                                    address=(a.address if a else "")[:100]))
+        addr = (a.address if a else "").strip()
+        if not addr:
+            out.append(self.finding("sender.invalid_format", "From address is missing or unreadable", address=""))
+        elif not ADDR_RE.match(addr):
+            domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
+            unusual = bool(domain) and bool(re.fullmatch(r"[\w.\-\[\]:]+", domain))   # root@localhost, host_name.org
+            out.append(self.finding(
+                "sender.invalid_format",
+                "From address is unusual (no dotted domain)" if unusual else "From address is malformed",
+                0.4 if unusual else 1.0, address=addr[:100]))
         if a is None or not a.domain:
             return out
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from ..models import Email
 from ..util.domains import (brand_in_subdomain, decode_host, is_punycode, lookalike,
@@ -20,9 +20,10 @@ MAX_URLS = 200
 URL_IN_TEXT = re.compile(r"https?://[^\s<>\"'\)\]]+", re.I)
 SHOWN_HOST = re.compile(r"^(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?:[/:?#].*)?$", re.I)
 INT_HOST = re.compile(r"^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,3}$", re.I)   # 2130706433, 0x7f.1, 0177.0.0.1
-LOGIN_WORDS = {"login", "signin", "logon", "verify", "verification", "secure", "account", "update",
-               "password", "passwd", "confirm", "webscr", "banking", "wallet", "unlock", "suspended",
-               "validate", "authenticate", "recover"}
+# strong words alone are suspicious; weak words are everywhere in legit URLs, so two are needed
+STRONG_LOGIN = {"login", "signin", "logon", "verify", "verification", "webscr", "password", "passwd",
+                "unlock", "suspended", "validate", "authenticate", "recover"}
+WEAK_LOGIN = {"secure", "account", "update", "confirm", "banking", "wallet"}
 
 
 def _is_ip(host: str) -> bool:
@@ -86,8 +87,13 @@ class Urls(Analyzer):
             except ValueError:
                 continue
             if m and target and registrable(m.group(1).lower()) != registrable(target):
-                hit("url.text_href_mismatch", 0.4 if bulk else 1.0,
-                    f"Link text shows {m.group(1).lower()} but goes to {target}", f"{text[:80]} -> {href[:120]}")
+                shown = m.group(1).lower()
+                # a click-tracker usually carries the real destination inside its own URL: soften, don't ignore
+                tracked = shown in unquote(unquote(href)).lower() or registrable(shown) in unquote(unquote(href)).lower()
+                conf = (0.4 if bulk else 1.0) * (0.3 if tracked else 1.0)
+                hit("url.text_href_mismatch", conf,
+                    f"Link text shows {shown} but goes to {target}" + (" (looks like a click-tracker)" if tracked else ""),
+                    f"{text[:80]} -> {href[:120]}")
 
         # ---- per-URL rules ------------------------------------------------ #
         for url in urls:
@@ -130,9 +136,10 @@ class Urls(Analyzer):
             if p.scheme == "http":
                 hit("url.not_https", 0.25 if bulk else 0.5, "Link does not use HTTPS", url)
             tokens = set(re.split(r"[^a-z0-9]+", (p.path + " " + p.query).lower()))
-            if tokens & LOGIN_WORDS:
-                hit("url.login_keywords", 0.3 if bulk else 0.6,
-                    f"Link path suggests a login/verification page ({', '.join(sorted(tokens & LOGIN_WORDS))})", url)
+            strong, weak = tokens & STRONG_LOGIN, tokens & WEAK_LOGIN
+            if strong or len(weak) >= 2:
+                hit("url.login_keywords", (0.6 if strong else 0.4) * (0.5 if bulk else 1.0),
+                    f"Link path suggests a login/verification page ({', '.join(sorted(strong | weak))})", url)
 
         # ---- the email talks about a brand, but every link goes somewhere unrelated ---- #
         if info and brands:

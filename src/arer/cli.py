@@ -20,7 +20,7 @@ import click
 
 from .config import ConfigError, load_config
 from .evaluate import evaluate, render
-from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, load_any
+from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
 from .models import Level
 from .pipeline import run_pipeline
 from .report import render_terminal, to_json
@@ -30,10 +30,13 @@ BAD = {Level.LIKELY_PHISHING, Level.MALICIOUS}
 
 
 def collect(target: Path, recursive: bool, suffixes: set[str]) -> list[Path]:
-    """A file -> itself. A folder -> matching files (symlinks and *.report.json skipped)."""
+    """A file -> itself. A folder -> matching files (symlinks and *.report.json skipped).
+    For `scan`, files without an extension count too when they look like e-mail."""
     if target.is_file():
         return [target]
     pattern = "**/*" if recursive else "*"
+    if suffixes == SCAN_SUFFIXES:
+        return sorted(p for p in target.glob(pattern) if is_mail_candidate(p))
     return sorted(
         p for p in target.glob(pattern)
         if p.is_file() and not p.is_symlink()
@@ -47,6 +50,8 @@ def main(verbose: bool):
     """arer: parse emails and detect phishing, fully local."""
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
+    # mail-parser warns about every calendar invite; that is noise unless you asked for -v
+    logging.getLogger("mailparser").setLevel(logging.DEBUG if verbose else logging.ERROR)
 
 
 # --------------------------------------------------------------------------- #
