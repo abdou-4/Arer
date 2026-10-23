@@ -15,6 +15,7 @@ then, so your weights do not simply memorise your samples.
 from __future__ import annotations
 
 import csv
+import math
 import statistics
 from collections import Counter
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ class Result:
     path: Path
     label: str                 # "phish" | "legit"
     verdict: Verdict
+    source: str = ""           # folder it came from, e.g. "legit/modern" or "legit/archive"
 
     @property
     def split(self) -> str:
@@ -76,9 +78,12 @@ def _read_overrides(root: Path) -> dict[str, str]:
     return out
 
 
-def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None = None) -> Evaluation:
+def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None = None,
+             skip_dirs: set[str] | None = None) -> Evaluation:
     overrides = _read_overrides(root)
-    files = sorted(p for p in root.rglob("*") if is_mail_candidate(p))
+    skip_dirs = {d.lower() for d in (skip_dirs or set())}
+    files = sorted(p for p in root.rglob("*") if is_mail_candidate(p)
+                   and not ({x.lower() for x in p.relative_to(root).parts[:-1]} & skip_dirs))
     ev = Evaluation([], [])
     seen: set[str] = set()
     for p in files:
@@ -96,7 +101,7 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
             ev.duplicates += 1
             continue
         seen.add(verdict.sha256)
-        r = Result(p, label, verdict)
+        r = Result(p, label, verdict, source="/".join(p.relative_to(root).parts[:-1]) or "(root)")
         if only == "all" or r.split == only:
             ev.results.append(r)
     return ev
@@ -105,6 +110,23 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
 # --------------------------------------------------------------------------- #
 def _pct(n: int, d: int) -> str:
     return f"{100 * n / d:5.1f}%" if d else "  n/a "
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% range for a rate k/n. With few samples it is wide, which is the honest answer:
+    0 false alarms in 10 emails is still compatible with about 28%."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    d = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return max(0.0, (centre - margin) / d), min(1.0, (centre + margin) / d)
+
+
+def _rng(k: int, n: int) -> str:
+    lo, hi = wilson(k, n)
+    return f"[{100 * lo:.0f}-{100 * hi:.0f}%]"
 
 
 def confusion(results: list[Result], flagged) -> dict[str, int]:
@@ -131,16 +153,30 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
         L.append(f"  could not load: {e}")
 
     # ---- by severity level -------------------------------------------------- #
-    L += ["", "Detection by level (flagged = this level or higher)",
-          f"  {'level':<18}{'phishing caught':>18}{'legit flagged':>16}{'precision':>11}"]
+    L += ["", "Detection by level (flagged = this level or higher; [..] = 95% range given the sample size)",
+          f"  {'level':<20}{'phishing caught':>29}{'legit flagged':>28}{'precision':>9}"]
     th = cfg.thresholds
     cutoff = {Level.SUSPICIOUS: th.suspicious, Level.LIKELY_PHISHING: th.likely_phishing, Level.MALICIOUS: th.malicious}
     for lvl in LEVELS:
         c = confusion(R, lambda r, lvl=lvl: r.verdict.level.rank >= lvl.rank)
         prec = _pct(c["tp"], c["tp"] + c["fp"]) if c["tp"] + c["fp"] else "  n/a "
-        L.append(f"  {lvl.value + f' ({cutoff[lvl]})':<18}"
-                 f"{c['tp']:>8}/{len(phish):<3} {_pct(c['tp'], len(phish)):>6}"
-                 f"{c['fp']:>8}/{len(legit):<3} {_pct(c['fp'], len(legit)):>6}{prec:>11}")
+        L.append(f"  {lvl.value + f' ({cutoff[lvl]})':<20}"
+                 f"{c['tp']:>6}/{len(phish):<4}{_pct(c['tp'], len(phish)):>7} {_rng(c['tp'], len(phish)):<10}"
+                 f"{c['fp']:>5}/{len(legit):<4}{_pct(c['fp'], len(legit)):>7} {_rng(c['fp'], len(legit)):<10}{prec:>9}")
+
+    # ---- by source ---------------------------------------------------------- #
+    sources = sorted({r.source for r in R})
+    if len(sources) > 1:
+        L += ["", f"By source (flagged = {Level.SUSPICIOUS.value} or higher)",
+              f"  {'source':<26}{'n':>5}{'flagged':>12}{'median':>8}{'max':>6}"]
+        for s in sources:
+            rs = [r for r in R if r.source == s]
+            n_flag = sum(1 for r in rs if r.verdict.level.rank >= Level.SUSPICIOUS.rank)
+            sc = [r.verdict.score for r in rs]
+            L.append(f"  {safe_text(s, 24):<26}{len(rs):>5}{f'{n_flag} ({100 * n_flag / len(rs):.0f}%)':>12}"
+                     f"{int(statistics.median(sc)):>8}{max(sc):>6}")
+        if sum(1 for s in sources if s.split('/')[0] in LEGIT_DIRS) > 1:
+            L.append("  tip: judge false alarms on your modern mail. Old archives are for stress tests, not tuning.")
 
     # ---- misses and false alarms ------------------------------------------- #
     first = Level.SUSPICIOUS
