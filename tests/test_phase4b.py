@@ -47,9 +47,10 @@ def test_mailing_list_softens_reply_to_and_message_id():
 
 
 # --- graded invalid_format -------------------------------------------------- #
-def test_unusual_but_parseable_from_is_weak():
-    assert ids(Sender(), mk(frm="root@localhost"))["sender.invalid_format"].confidence == 0.4
-    assert ids(Sender(), mk(frm="a@mail_server.example.com"))["sender.invalid_format"].confidence == 0.4
+def test_unusual_from_keeps_full_strength():
+    r = ids(Sender(), mk(frm="root@localhost"))["sender.invalid_format"]
+    assert r.confidence == 1.0 and "unusual" in r.summary
+    assert ids(Sender(), mk(frm="a@mail_server.example.com"))["sender.invalid_format"].confidence == 1.0
 
 def test_missing_from_is_strong():
     r = ids(Sender(), mk(frm=None))

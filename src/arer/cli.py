@@ -165,17 +165,18 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, config_d
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path), default=Path("data/samples"))
 @click.option("--only", type=click.Choice(["all", "dev", "test"]), default="all", show_default=True,
               help="Use a stable 80/20 split: tune on dev, check on test.")
+@click.option("--skip-dir", "skip_dirs", multiple=True, help="Ignore any folder with this name (e.g. archive).")
 @click.option("--details", is_flag=True, help="List every sample with its score.")
 @click.option("--skip", multiple=True, help="Analyzer name to turn off, to see what it contributes.")
 @click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
               help="Config folder to test (copy config/ and change weights to compare).")
-def eval_cmd(root, only, details, skip, config_dir):
+def eval_cmd(root, only, skip_dirs, details, skip, config_dir):
     """Score every sample under ROOT/phish and ROOT/legit and report detection and false alarms."""
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
         raise click.ClickException(str(e))
-    ev = evaluate(root, cfg, only=only, skip=set(skip))
+    ev = evaluate(root, cfg, only=only, skip=set(skip), skip_dirs=set(skip_dirs))
     if not ev.results:
         click.echo(click.style(f"no labeled samples found under {root} (need phish/ and legit/ folders)", fg="red"), err=True)
         sys.exit(1)

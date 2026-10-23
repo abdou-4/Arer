@@ -103,6 +103,7 @@ Tuning weights by feel does not work. `arer eval` scores every sample and tells 
 ```bash
 arer eval                      # everything under data/samples
 arer eval --details            # also list every sample with its score
+arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept only as a stress test)
 arer eval --only dev           # tune on 80% of samples ...
 arer eval --only test          # ... and check on the other 20% now and then
 arer eval --skip body          # what happens if an analyzer is turned off?
@@ -120,7 +121,8 @@ What it shows:
 
 | Section | Use it to |
 |---|---|
-| Detection by level | See how many phishing emails reach SUSPICIOUS / LIKELY_PHISHING / MALICIOUS, and how many legit emails are wrongly flagged at each level. |
+| Detection by level | How many phishing emails reach SUSPICIOUS / LIKELY_PHISHING / MALICIOUS and how many legit emails are wrongly flagged at each level. Each rate has a 95% range in brackets. With 10 legit emails, 0 false alarms still allows about 28%, so do not read 0/10 as "solved". 60 emails brings the ceiling to about 6%, 100 to about 4%. |
+| By source | The same numbers per folder (`legit/modern`, `legit/archive`, `phish`), so you can judge false alarms on modern mail without separate runs. |
 | Phishing MISSED / Legit FLAGGED | Open the exact emails that need work. |
 | Score sweep | Pick thresholds: choose the T that catches the most phishing before legit mail starts getting flagged. |
 | Findings table | See which findings help (fire on phishing) and which are noisy (marked `<- noisy`, fire on legit mail). Lower the weight of noisy ones in `rules.yaml`. |
@@ -136,12 +138,23 @@ The workflow: run `arer eval`, change one thing in `rules.yaml` or a list, run i
 3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many samples, and the dev/test split can leak. Judge by campaigns, not by counts.
 4. **Too little modern legit mail.** Aim for 40 or more of your own recent emails, including newsletters, receipts, notifications and mailing lists.
 
+### Suggested folder layout
+
+```
+data/samples/phish/            Phishing Pot samples
+data/samples/legit/modern/     your own recent mail  <- the numbers that matter
+data/samples/legit/archive/    SpamAssassin ham: old and anonymised, stress test only
+data/samples/spam/             ignored
+```
+
+Old SpamAssassin mail contains `user@localhost` addresses, no authentication results and plain-HTTP links. Those are artefacts of the corpus and the year, so do not tune on them.
+
 ### Getting your own legitimate mail
 
 ```bash
 # 1. Gmail: takeout.google.com -> deselect all -> Mail -> only the Inbox label -> export (an .mbox file)
 # 2. Sample it:
-python scripts/mbox_to_eml.py "Inbox.mbox" -o data/samples/legit --count 60 --prefix mine
+python scripts/mbox_to_eml.py "Inbox.mbox" -o data/samples/legit/modern --count 60 --prefix mine
 ```
 
 It picks random Inbox messages, skips Spam, Trash, Drafts and Sent (sent mail has no receiving-server stamp), writes `mine_0001.eml` and so on, and never exports the same message twice, so you can run it again to add more. Your real mail is private: add `data/samples/legit/mine_*` to `.gitignore`.

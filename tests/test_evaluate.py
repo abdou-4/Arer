@@ -4,7 +4,7 @@ from click.testing import CliRunner
 
 from arer.cli import main
 from arer.config import load_config
-from arer.evaluate import evaluate, render
+from arer.evaluate import evaluate, render, wilson
 
 cfg = load_config()
 
@@ -68,3 +68,31 @@ def test_cli_eval_without_labels_fails_cleanly(tmp_path):
     write(tmp_path / "x" / "a.eml", "A <a@example.org>", "s", "b")
     r = CliRunner().invoke(main, ["eval", str(tmp_path)])
     assert r.exit_code == 1
+
+
+def test_wilson_range_is_honest_about_small_samples():
+    lo, hi = wilson(0, 10)
+    assert lo == 0.0 and 0.27 < hi < 0.29          # 0 of 10 still allows ~28%
+    assert wilson(0, 100)[1] < 0.04                 # 100 samples: under 4%
+    assert wilson(5, 5)[1] == 1.0 and wilson(0, 0) == (0.0, 1.0)
+
+def test_level_table_shows_ranges(tmp_path):
+    build(tmp_path)
+    out = render(evaluate(tmp_path, cfg), cfg)
+    assert "95% range" in out and "[0-" in out
+
+def test_by_source_table_and_skip_dir(tmp_path):
+    build(tmp_path)
+    write(tmp_path / "legit" / "archive" / "old1.eml", "Sam <sam@example.org>", "old one", "hello old")
+    write(tmp_path / "legit" / "archive" / "old2.eml", "Ann <ann@example.org>", "old two", "hello again")
+    out = render(evaluate(tmp_path, cfg), cfg)
+    assert "By source" in out and "legit/archive" in out and "phish" in out
+    skipped = evaluate(tmp_path, cfg, skip_dirs={"Archive"})            # case-insensitive
+    assert {r.source for r in skipped.results} == {"phish", "legit"}
+    assert skipped.unlabeled == 0 and len(skipped.results) == 4
+
+def test_cli_skip_dir(tmp_path):
+    build(tmp_path)
+    write(tmp_path / "legit" / "archive" / "old1.eml", "Sam <sam@example.org>", "old one", "hello old")
+    r = CliRunner().invoke(main, ["eval", str(tmp_path), "--skip-dir", "archive"])
+    assert r.exit_code == 0 and "2 phishing, 2 legitimate" in r.output

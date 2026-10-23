@@ -38,10 +38,13 @@ class Sender(Analyzer):
         elif not ADDR_RE.match(addr):
             domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
             unusual = bool(domain) and bool(re.fullmatch(r"[\w.\-\[\]:]+", domain))   # root@localhost, host_name.org
+            # Full strength on purpose. Phase 4b softened "unusual" addresses because 2002-era, anonymised
+            # SpamAssassin ham is full of user@localhost. That cost 3 real phishing detections and bought
+            # nothing on modern mail (0/10 legit), so modern mail wins.
             out.append(self.finding(
                 "sender.invalid_format",
                 "From address is unusual (no dotted domain)" if unusual else "From address is malformed",
-                0.4 if unusual else 1.0, address=addr[:100]))
+                address=addr[:100]))
         if a is None or not a.domain:
             return out
 
