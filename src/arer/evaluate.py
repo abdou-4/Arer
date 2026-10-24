@@ -154,7 +154,7 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
 
     # ---- by severity level -------------------------------------------------- #
     L += ["", "Detection by level (flagged = this level or higher; [..] = 95% range given the sample size)",
-          f"  {'level':<20}{'phishing caught':>29}{'legit flagged':>28}{'precision':>9}"]
+          f"  {'level':<20}{'phishing caught':>29}{'legit flagged':>28}{'precision':>11}"]
     th = cfg.thresholds
     cutoff = {Level.SUSPICIOUS: th.suspicious, Level.LIKELY_PHISHING: th.likely_phishing, Level.MALICIOUS: th.malicious}
     for lvl in LEVELS:
@@ -162,7 +162,7 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
         prec = _pct(c["tp"], c["tp"] + c["fp"]) if c["tp"] + c["fp"] else "  n/a "
         L.append(f"  {lvl.value + f' ({cutoff[lvl]})':<20}"
                  f"{c['tp']:>6}/{len(phish):<4}{_pct(c['tp'], len(phish)):>7} {_rng(c['tp'], len(phish)):<10}"
-                 f"{c['fp']:>5}/{len(legit):<4}{_pct(c['fp'], len(legit)):>7} {_rng(c['fp'], len(legit)):<10}{prec:>9}")
+                 f"{c['fp']:>5}/{len(legit):<4}{_pct(c['fp'], len(legit)):>7} {_rng(c['fp'], len(legit)):<10}{prec:>11}")
 
     # ---- by source ---------------------------------------------------------- #
     sources = sorted({r.source for r in R})
@@ -184,11 +184,11 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
     false_alarms = [r for r in legit if r.verdict.level.rank >= first.rank]
     L += ["", f"Phishing MISSED (below {first.value}): {len(missed)}"]
     for r in sorted(missed, key=lambda r: r.verdict.score):
-        top = ", ".join(f.id for f in r.verdict.findings[:3]) or "no findings"
+        top = ", ".join([f.id for f in r.verdict.findings if f.weight > 0][:3]) or "no findings"
         L.append(f"  score {r.verdict.score:>3}  {safe_text(r.path.name, 60)}   [{top}]")
     L += ["", f"Legit mail FLAGGED (false alarms): {len(false_alarms)}"]
     for r in sorted(false_alarms, key=lambda r: -r.verdict.score):
-        top = ", ".join(f"{f.id}(+{round(f.weight * f.confidence)})" for f in r.verdict.findings[:4])
+        top = ", ".join(f"{f.id}(+{round(f.weight * f.confidence)})" for f in [x for x in r.verdict.findings if x.weight > 0][:4])
         L.append(f"  score {r.verdict.score:>3}  {safe_text(r.path.name, 60)}   [{top}]")
 
     # ---- score distribution and sweep -------------------------------------- #
@@ -205,9 +205,9 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
     # ---- which findings are useful ----------------------------------------- #
     on_p, on_l = Counter(), Counter()
     for r in phish:
-        on_p.update({f.id for f in r.verdict.findings})
+        on_p.update({f.id for f in r.verdict.findings if f.weight > 0})
     for r in legit:
-        on_l.update({f.id for f in r.verdict.findings})
+        on_l.update({f.id for f in r.verdict.findings if f.weight > 0})
     ids = sorted(set(on_p) | set(on_l), key=lambda i: (-(on_p[i] - on_l[i]), i))
     L += ["", "Findings: how often each fires", f"  {'finding':<34}{'on phishing':>12}{'on legit':>10}"]
     for i in ids:

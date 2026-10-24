@@ -37,6 +37,7 @@ LIST_FILES = {
     "credential_words": "credential_words.txt",
     "generic_greetings": "generic_greetings.txt",
     "callback_words": "callback_words.txt",
+    "lure_words": "lure_words.txt",
 }
 
 
@@ -68,6 +69,33 @@ class AuthSettings(BaseModel):
     trusted_authserv_ids: list[str] = Field(default_factory=list)
 
 
+class FeedSource(BaseModel):
+    """One blocklist. Either a download (url) or a local file (path, for your own hashes)."""
+    url: str = ""
+    path: str = ""
+    kind: str                           # url | domain | hash
+    enabled: bool = True
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.kind not in ("url", "domain", "hash"):
+            raise ValueError(f"feed kind must be url, domain or hash, not '{self.kind}'")
+        if bool(self.url) == bool(self.path):
+            raise ValueError("a feed needs exactly one of url or path")
+        if self.url and not self.url.lower().startswith("https://"):
+            raise ValueError("feed urls must use https://")
+        return self
+
+
+class FeedsSettings(BaseModel):
+    data_dir: Path = Path("data/feeds")
+    max_age_days: int = Field(7, ge=1, le=365)
+    max_download_mb: int = Field(150, ge=1, le=2000)
+    min_keep_ratio: float = Field(0.5, ge=0.0, le=1.0)
+    sources: dict[str, FeedSource] = Field(default_factory=dict)
+
+
 class Override(BaseModel):
     finding: str
     min_level: Level
@@ -77,6 +105,7 @@ class Config(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    feeds: FeedsSettings = Field(default_factory=FeedsSettings)
     caps: dict[str, int]
     weights: dict[str, int]
     overrides: list[Override] = Field(default_factory=list)
@@ -147,10 +176,26 @@ def load_config(config_dir: str | Path | None = None) -> Config:
             lists[key] = frozenset()
     data["lists"] = lists
 
+    feeds_file = base / "feeds.yaml"
+    if feeds_file.is_file():
+        try:
+            fdata = yaml.safe_load(feeds_file.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"feeds.yaml is not valid YAML: {e}") from e
+        data["feeds"] = fdata
+
     try:
-        return Config.model_validate(data)
+        cfg = Config.model_validate(data)
     except Exception as e:                      # pydantic ValidationError
-        raise ConfigError(f"invalid rules.yaml: {e}") from e
+        raise ConfigError(f"invalid configuration: {e}") from e
+    # data_dir: $PHISHSCOPE_FEEDS, else relative to the project root (the folder holding config/)
+    env = os.environ.get("PHISHSCOPE_FEEDS")
+    d = Path(env) if env else cfg.feeds.data_dir
+    cfg.feeds.data_dir = d if d.is_absolute() else (base.resolve().parent / d)
+    for s in cfg.feeds.sources.values():
+        if s.path and not Path(s.path).is_absolute():
+            s.path = str(base.resolve().parent / s.path)
+    return cfg
 
 
 @lru_cache(maxsize=1)

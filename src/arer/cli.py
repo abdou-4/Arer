@@ -183,5 +183,71 @@ def eval_cmd(root, only, skip_dirs, details, skip, config_dir):
     click.echo(render(ev, cfg, details=details))
 
 
+# --------------------------------------------------------------------------- #
+# arer feeds update | status   (the only part of arer that uses the network)
+# --------------------------------------------------------------------------- #
+@main.group()
+def feeds():
+    """Download and inspect the local phishing blocklists."""
+
+
+@feeds.command("update")
+@click.argument("names", nargs=-1)
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False), help="Config folder.")
+def feeds_update(names, config_dir):
+    """Download the enabled feeds (or only NAMES) and rebuild the index. Needs internet."""
+    from .intel.updater import update_all
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError as e:
+        raise click.ClickException(str(e))
+    if not cfg.feeds.sources:
+        raise click.ClickException("no feeds configured (config/feeds.yaml is missing or empty)")
+    results = update_all(cfg, list(names) or None)
+    if not results:
+        raise click.ClickException("no enabled feeds. Enable one in config/feeds.yaml or name it: arer feeds update NAME")
+    bad = False
+    for r in results:
+        if r.skipped:
+            click.echo(f"[skip] {r.name:<30} {r.message}")
+        elif r.ok:
+            click.echo(f"[ok]   {r.name:<30} {r.entries:>9,} entries  {r.bytes / 1e6:6.1f} MB  ({r.seconds:.1f}s)")
+        else:
+            bad = True
+            click.echo(click.style(f"[fail] {r.name:<30} {safe_text(r.message, 160)}", fg="red"), err=True)
+    for r in results:
+        note = cfg.feeds.sources.get(r.name).note if r.name in cfg.feeds.sources else ""
+        if r.ok and not r.skipped and "NON-COMMERCIAL" in note.upper():
+            click.echo(click.style(f"note: {r.name}: {note}", fg="yellow"))
+    sys.exit(1 if bad else 0)
+
+
+@feeds.command("status")
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False), help="Config folder.")
+def feeds_status(config_dir):
+    """Show which feeds are loaded and how old they are."""
+    from datetime import datetime, timezone
+    from .intel.store import DB_NAME, IntelStore
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError as e:
+        raise click.ClickException(str(e))
+    store = IntelStore.open(cfg.feeds.data_dir)
+    have = {s.name: s for s in store.sources()} if store else {}
+    db = cfg.feeds.data_dir / DB_NAME
+    click.echo(f"index: {db}" + (f"  ({db.stat().st_size / 1e6:.1f} MB)" if db.is_file() else "  (not built yet)"))
+    click.echo(f"{'feed':<30}{'enabled':<9}{'entries':>10}  {'age':<10} note")
+    now = datetime.now(timezone.utc)
+    for name, spec in cfg.feeds.sources.items():
+        s = have.get(name)
+        if s:
+            age = (now - datetime.fromisoformat(s.fetched_at)).days
+            stale = spec.enabled and age > cfg.feeds.max_age_days
+            age_txt = click.style(f"{age}d STALE", fg="red") if stale else f"{age}d"
+            click.echo(f"{name:<30}{'yes' if spec.enabled else 'no':<9}{s.entries:>10,}  {age_txt:<10} {safe_text(spec.note, 60)}")
+        else:
+            click.echo(f"{name:<30}{'yes' if spec.enabled else 'no':<9}{'-':>10}  {'never':<10} {safe_text(spec.note, 60)}")
+
+
 if __name__ == "__main__":
     main()

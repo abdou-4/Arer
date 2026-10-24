@@ -369,6 +369,7 @@ class Category(str, Enum):
     ATTACHMENT = "attachment"
     BODY = "body"
     AI = "ai"
+    INTEL = "intel"          # notices about blocklist data (weight 0)
 
 
 class Level(str, Enum):

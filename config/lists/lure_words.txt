@@ -1,0 +1,36 @@
+# Prize / lottery / inheritance / crypto-giveaway scam phrases (lowercase). Matched against subject, text and attachment file names.
+# Two or more different phrases = full confidence; one = half. Generic words (winner, donation) are left out on purpose.
+you have won
+you ve won
+has won you
+email address has won
+won the lottery
+claim your prize
+claim your winnings
+winning notification
+lottery
+jackpot
+unclaimed funds
+inheritance
+next of kin
+beneficiary
+charity donor
+kindly get back
+kindly reply
+urgent business proposal
+business proposal
+transfer of funds
+western union
+moneygram
+free bitcoin
+1 bitcoin
+get up to 1 btc
+vous avez gagne
+loterie
+heritage
+beneficiaire
+voce ganhou
+loteria
+heranca
+ha ganado
+herencia

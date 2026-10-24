@@ -1,0 +1,35 @@
+# Blocklist feeds. `arer feeds update` downloads them into data/feeds/intel.db, a hash index
+# (the raw lists are not kept). Only `arer feeds update` ever touches the network.
+data_dir: data/feeds
+max_age_days: 7          # scans warn when a feed is older than this
+max_download_mb: 150     # refuse bigger downloads
+min_keep_ratio: 0.5      # refuse an update that shrinks a feed below 50% of its last size (outage / poisoning guard)
+
+sources:
+  phishing_db_domains:
+    url: https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/refs/heads/master/phishing-domains-ACTIVE.txt
+    kind: domain
+    note: "Phishing.Database, MIT licence. About 390k live phishing domains."
+  phishing_db_links:
+    url: https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/refs/heads/master/phishing-links-ACTIVE.txt
+    kind: url
+    note: "Phishing.Database, MIT licence. About 790k live phishing URLs (66 MB download)."
+  openphish:
+    url: https://openphish.com/feed.txt
+    kind: url
+    enabled: false
+    note: "OpenPhish community feed: NON-COMMERCIAL use only. Set enabled: true if your use qualifies. Untested by the author."
+  phishing_db_links_inactive:
+    url: https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/refs/heads/master/phishing-links-INACTIVE.txt
+    kind: url
+    enabled: false
+    note: "Dead phishing URLs. Enable to measure blocklist value on OLD samples such as Phishing Pot (large download)."
+  phishing_db_domains_inactive:
+    url: https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/refs/heads/master/phishing-domains-INACTIVE.txt
+    kind: domain
+    enabled: false
+    note: "Dead phishing domains, for measuring on old samples."
+  local_hashes:
+    path: data/feeds/local-hashes.txt
+    kind: hash
+    note: "Your own list of known-bad attachment SHA-256 hashes, one per line (# comments allowed)."

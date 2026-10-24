@@ -41,6 +41,8 @@ def render_terminal(v: Verdict, cfg=None) -> str:
     if v.by_category:
         L.append("")
         for cat, pts in sorted(v.by_category.items(), key=lambda kv: -kv[1]):
+            if pts == 0:
+                continue
             cap = cfg.cap_for(cat) if cfg else "?"
             L.append(f"  {cat:<11}{pts:>3} / {cap}")
 

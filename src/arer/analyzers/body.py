@@ -19,6 +19,10 @@ ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 GREET_EMAIL = re.compile(r"(?<!\w)(?:dear|hello|hi|bonjour|cher|chere|ola|hola|estimado)\s+[\w.+\-]+@[\w.\-]+")
 # phone numbers need separators/parentheses, so a plain case id like 33897467193 does not count
 PHONE = re.compile(r"(?<![\w.])(?:(?:\+?\d{1,3}[\s.\-])?(?:\(\d{3}\)\s?|\d{3}[\s.\-])\d{3}[\s.\-]?\d{4}|\+\d{1,3}[\s.\-]?\d{1,4}[\s.\-]?\d{3,4}[\s.\-]?\d{3,4})(?![\w])")
+DOT_SUBJECT = re.compile(r"^(?:[A-Za-z0-9]{1,12}\.){4,}[A-Za-z0-9]{1,12}$")
+FILLER = {"now", "get", "up", "to", "your", "you", "the", "free", "win", "won", "claim", "click", "here", "for", "and",
+          "is", "are", "of", "in", "on", "a", "new", "urgent", "open", "view", "see", "call", "buy", "only", "today",
+          "off", "from", "with", "this", "that", "just", "are", "be", "it", "my", "me", "we"}
 AMOUNT = re.compile(r"[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:usd|eur|gbp|dollars|euros)\b", re.I)
 
 
@@ -66,6 +70,17 @@ class Body(Analyzer):
         if cred:
             out.append(self.finding("body.credential_words", f"Asks for credentials or payment data: {', '.join(cred[:5])}",
                                     min(1.0, len(cred) / 3), phrases=cred[:10]))
+
+        # prize / lottery / inheritance / crypto-giveaway language, also in attachment file names
+        lure_text = " ".join([email.envelope.subject, text, *(a.filename for a in email.attachments)])
+        lures = matched(lure_text, L.get("lure_words", frozenset()))
+        if lures:
+            out.append(self.finding("body.prize_lure", f"Prize, lottery or giveaway scam language: {', '.join(lures[:5])}",
+                                    min(1.0, len(lures) / 2), phrases=lures[:10]))
+        subj = email.envelope.subject.strip()
+        if DOT_SUBJECT.match(subj) and sum(1 for w in subj.lower().split(".") if w in FILLER) >= 2:
+            out.append(self.finding("body.obfuscated_subject", "Subject uses dots instead of spaces to slip past filters",
+                                    subject=subj[:100]))
 
         head = text.strip()[:200]
         greet = matched(head, L.get("generic_greetings", frozenset()))

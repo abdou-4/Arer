@@ -25,6 +25,7 @@ caps:                       # max points one category can contribute
   attachment: 35
   body: 25
   ai: 20
+  intel: 0                   # notices only (weight 0)
 
 weights:
   # ---- auth (read from Authentication-Results, never re-run SPF) ----
@@ -45,6 +46,7 @@ weights:
   sender.lookalike_domain: 15
   sender.punycode_domain: 8
   sender.shared_domain: 8
+  sender.on_blocklist: 25
 
   # ---- headers ----
   headers.missing_received: 5
@@ -58,6 +60,7 @@ weights:
 
   # ---- url ----
   url.on_blocklist: 40
+  url.domain_on_blocklist: 25
   url.text_href_mismatch: 20
   url.ip_host: 10
   url.suspicious_tld: 5
@@ -90,6 +93,12 @@ weights:
   body.image_only: 5
   body.generic_greeting: 3
   body.callback_lure: 15
+  body.prize_lure: 12
+  body.obfuscated_subject: 6
+
+  # ---- intel notices (never add points) ----
+  intel.feeds_missing: 0
+  intel.feeds_stale: 0
 
   # ---- ai (later; keep small until validated) ----
   ai.text_classifier: 10
