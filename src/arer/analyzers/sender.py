@@ -57,11 +57,16 @@ class Sender(Analyzer):
 
         # --- Reply-To goes somewhere else ---------------------------------- #
         rt = email.reply_to_domain
-        if rt and registrable(rt) != from_reg:
+        rt_addr = email.envelope.reply_to[0].address.lower() if email.envelope.reply_to else ""
+        # On a free-mail provider the domain says nothing about WHO owns the mailbox, so compare the whole address
+        same_inbox_host_diff_box = bool(rt_addr) and from_reg in free and rt_addr != a.address.lower()
+        if rt and (registrable(rt) != from_reg or same_inbox_host_diff_box):
+            what = (f"Replies go to a different mailbox ({rt_addr}) than the sender ({a.address})"
+                    if same_inbox_host_diff_box and registrable(rt) == from_reg
+                    else f"Reply-To domain {rt} differs from From domain {a.domain}")
             out.append(self.finding(
-                "sender.reply_to_mismatch",
-                f"Reply-To domain {rt} differs from From domain {a.domain}",
-                0.4 if email.is_bulk else 1.0, reply_to=rt, from_domain=a.domain, bulk_mail=email.is_bulk))
+                "sender.reply_to_mismatch", what,
+                0.4 if email.is_bulk else 1.0, reply_to=rt_addr or rt, from_domain=a.domain, bulk_mail=email.is_bulk))
 
         # --- display name faking an address or a brand --------------------- #
         name = a.name or ""

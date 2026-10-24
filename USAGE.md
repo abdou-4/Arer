@@ -22,6 +22,8 @@ arer = "arer.cli:main"
 arer parse <file-or-folder>     # .eml/.msg  ->  JSON files        (your original tool)
 arer scan  <file-or-folder>...  # .eml/.msg/.json  ->  verdict     (parse + analyze in one step)
 arer eval  [data/samples]       # score ALL labeled samples, report detection and false alarms
+arer feeds update               # download the phishing blocklists (the ONLY command that uses the internet)
+arer feeds status               # which blocklists are loaded, and how old they are
 ```
 
 `scan` parses in memory, so for daily use you only need `scan`. Use `parse` when you want the JSON on disk.
@@ -129,6 +131,47 @@ What it shows:
 
 The workflow: run `arer eval`, change one thing in `rules.yaml` or a list, run it again, and keep the change only if detection went up without more false alarms. Below about 30 samples per class the numbers are only a rough guide. Public sets (Phishing Pot, SpamAssassin) are in the earlier notes.
 
+## Blocklists: `arer feeds`
+
+Scans can check links, the sender domain and attachment hashes against public phishing blocklists, entirely offline. `arer feeds update` is the only command that touches the network.
+
+```bash
+arer feeds update              # downloads the enabled feeds (about 16 seconds, 66 MB) and builds data/feeds/intel.db
+arer feeds status              # entries and age of every feed
+arer feeds update openphish    # download one feed by name, even if it is disabled
+```
+
+Add `data/feeds/` to `.gitignore`. The index is about 27 MB and is a disposable cache: delete it any time and run `update` again. It stores only hashes of entries, never the lists, so it cannot be read back as a list of URLs.
+
+**Feeds** (`config/feeds.yaml`):
+
+| Feed | Default | Notes |
+|---|---|---|
+| `phishing_db_domains`, `phishing_db_links` | on | Phishing.Database, MIT licence, live phishing only: about 392k domains and 777k URLs. |
+| `openphish` | **off** | OpenPhish community feed. **Non-commercial use only.** Enable it only if your use qualifies. Not tested by the author (the sandbox could not reach it). |
+| `phishing_db_*_inactive` | off | Dead phishing. Enable these to see blocklist hits on OLD samples such as Phishing Pot. Large downloads. |
+| `local_hashes` | on | `data/feeds/local-hashes.txt`: your own known-bad attachment SHA-256 hashes, one per line, `#` comments allowed. Run `arer feeds update` after editing it. |
+
+A feed you downloaded but disabled in `feeds.yaml` is ignored by scans.
+
+**What the findings mean**
+
+| Finding | Meaning | Effect |
+|---|---|---|
+| `url.on_blocklist` | A listed phishing page, matched on host/path/query (http and https match each other). | Forces MALICIOUS. |
+| `url.domain_on_blocklist` | The link's domain, or a parent of it, is listed. A listed root page of a site counts here too. | +25, no forced level. |
+| `sender.on_blocklist` | The From domain is listed. | +25. |
+| `attachment.known_malicious_hash` | Hash is in your local list. | Forces MALICIOUS. |
+| `intel.feeds_missing` / `intel.feeds_stale` | No data yet, or older than `max_age_days` (default 7). Adds no points, but never leaves you with silent false comfort. | Notice only. |
+
+**False-alarm protections** (each one found by testing against the live feed):
+- The feed lists `https://www.amazon.com/` and `bit.ly` today. A listed root page of a protected site is ignored, and protected domains (your `legit_domains`, `mail_platforms`, `free_mail`, and shorteners) never match at domain level, so one bad entry cannot condemn every mail that links to them. A specific listed page on such a site, like one Drive file, still hits.
+- About one fifth of the domain feed is subdomains of shared hosts (`github.io`, `pages.dev`). For those, only the exact listed subdomain matches, never the host itself.
+- An update that would shrink a feed below half its previous size is refused, and an error page or garbage download is rejected, so an outage cannot wipe good data.
+- Downloads are HTTPS only, size-capped, and may redirect only to the same host.
+
+**Old samples:** the live lists hold only active phishing, so old Phishing Pot samples will rarely hit. To measure the blocklist on them, set `enabled: true` on the two `_inactive` feeds and run `arer feeds update`.
+
 ## Building a trustworthy test set
 
 `arer eval` is only as honest as its samples. Four traps to avoid:
@@ -195,6 +238,7 @@ One entry per line, lowercase, `#` for comments. Put the source and date at the 
 | `shared_domains.txt` | Domains where anyone can register a free name (`onmicrosoft.com`, `pages.dev`, `github.io`...) | Add more as you see them abused. |
 | `mail_platforms.txt` | Big mail platforms (Google, Microsoft, Amazon SES, Mailchimp...) whose Message-ID and Return-Path are normal | Add senders' ESPs when you see false mismatches. |
 | `callback_words.txt` | Phrases for the callback-scam check. It needs a phone number AND an amount AND one of these | Add phrases in your languages. |
+| `lure_words.txt` | Prize, lottery, inheritance and crypto-giveaway phrases, matched in the subject, text and attachment file names. Two different phrases give full confidence, one gives half | Add phrases in your languages. Keep generic words (winner, donation) out. |
 | `urgency_words.txt`, `credential_words.txt`, `generic_greetings.txt` | Phrase lists for the body check (accents and punctuation ignored) | Add phrases in your languages. Inflected forms need their own line (`expira hoje`, `expiram hoje`). |
 | `legit_domains.txt` | Exempts known-good domains from brand and lookalike checks | Add your own company domain, bank and providers. **When a legit email gets flagged, fix it here first.** |
 | `suspicious_tlds.txt` | Links on heavily abused TLDs | Refresh from Spamhaus or Interisle reports. |
@@ -209,12 +253,13 @@ One entry per line, lowercase, `#` for comments. Put the source and date at the 
 | Analyzer | Finds |
 |---|---|
 | `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. |
-| `sender` | Malformed From, Reply-To pointing elsewhere, display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
+| `sender` | Malformed From, Reply-To pointing elsewhere (on Gmail and other free mail, a different mailbox counts, because the domain tells you nothing), display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
 | `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
 
 | `urls` | Static link checks only (nothing is ever fetched): link text vs real destination, bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
 | `attachments` | A message that says "see attached" but has no attachment, executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
-| `body` | Callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, hidden or zero-width text, image-only messages. |
+| `intel` | Links, sender domain and attachment hashes against the local blocklists (see Blocklists). |
+| `body` | Prize and lottery lures (also in attachment names), dot-spaced subjects (`Now.get.up.to.1.BTC`), callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, hidden or zero-width text, image-only messages. |
 
 Some checks are deliberately softer for newsletters (mail with a List-Unsubscribe header), because legitimate bulk senders often use other domains. In the report, a finding's points are its weight multiplied by its confidence.
 

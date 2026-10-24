@@ -14,10 +14,10 @@ from ..models import Email
 from ..util.domains import (brand_in_subdomain, decode_host, is_punycode, lookalike,
                             mixed_script, registrable, split_host)
 from ..util.html import parse_html
+from ..util.urlcollect import extract_urls
 from .base import Analyzer, register
 
 MAX_URLS = 200
-URL_IN_TEXT = re.compile(r"https?://[^\s<>\"'\)\]]+", re.I)
 SHOWN_HOST = re.compile(r"^(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?:[/:?#].*)?$", re.I)
 INT_HOST = re.compile(r"^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,3}$", re.I)   # 2130706433, 0x7f.1, 0177.0.0.1
 # strong words alone are suspicious; weak words are everywhere in legit URLs, so two are needed
@@ -48,24 +48,7 @@ class Urls(Analyzer):
         bulk = email.is_bulk
         info = parse_html(email.body_html) if email.body_html else None
 
-        # ---- collect ---------------------------------------------------- #
-        urls: list[str] = []
-        def add(u: str):
-            u = u.strip().rstrip(".,;:!?")
-            if u.lower().startswith(("http://", "https://")) and u not in urls and len(urls) < MAX_URLS:
-                urls.append(u)
-        if info:                                           # clickable links, form targets, URLs shown as text
-            for href, _ in info.links:
-                add(href)
-            for form in info.forms:
-                add(form["action"])
-            for u in URL_IN_TEXT.findall(info.visible_text):
-                add(u)
-        for u in URL_IN_TEXT.findall(email.body_text):
-            add(u)
-        if not info and not email.body_text:               # last resort. Raw-HTML URLs (xmlns, DTDs) are NOT links
-            for u in email.indicators.urls:
-                add(u)
+        urls = extract_urls(email, info, MAX_URLS)
 
         hits: dict[str, dict] = {}
         def hit(fid, conf, summary, url):
