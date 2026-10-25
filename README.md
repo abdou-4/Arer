@@ -1,8 +1,12 @@
-# arer: local-first phishing email triage
+# Arer — Explainable AI for Phishing Email Detection
 
-A command-line tool that reads an email (`.eml`, `.msg`, or already-parsed JSON), runs a set of independent static checks on it, and returns a score, a verdict, and the **evidence** behind that verdict. It runs entirely on your own machine: no email content is ever sent anywhere, and nothing inside an email is opened, executed, or fetched.
+AA privacy-first email threat detection engine built for transparent, evidence-driven security analysis.
 
-It started as a parser and grew into a small detection engine with blocklists, a private labeled history, and a built-in evaluation harness, so every change to a rule can be measured instead of guessed.
+Arer is a local-first phishing email triage tool that analyzes .eml, .msg, and JSON email data using independent security analyzers, threat-intelligence blocklists, and configurable risk scoring. Every verdict is backed by traceable findings and supporting evidence.
+
+Current: Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, and evaluation tooling.
+
+Roadmap: Machine learning and Explainable AI (XAI) to investigate phishing patterns, improve detection, and make model predictions interpretable.
 
 > Full command reference: **[USAGE.md](USAGE.md)**
 
