@@ -26,6 +26,7 @@ caps:                       # max points one category can contribute
   body: 25
   ai: 20
   intel: 0                   # notices only (weight 0)
+  history: 40
 
 weights:
   # ---- auth (read from Authentication-Results, never re-run SPF) ----
@@ -96,6 +97,12 @@ weights:
   body.prize_lure: 12
   body.obfuscated_subject: 6
 
+  # ---- history: signals from your OWN saved scans (only your labels teach it, never the tool's own verdicts) ----
+  history.new_sender: 3
+  history.known_bad_sender: 30
+  history.known_bad_link_domain: 20
+  history.known_bad_hash: 40
+
   # ---- intel notices (never add points) ----
   intel.feeds_missing: 0
   intel.feeds_stale: 0
@@ -108,3 +115,4 @@ overrides:                  # a finding that forces a minimum level regardless o
   - { finding: attachment.executable,          min_level: LIKELY_PHISHING }
   - { finding: attachment.known_malicious_hash, min_level: MALICIOUS }
   - { finding: url.on_blocklist,               min_level: MALICIOUS }
+  - { finding: history.known_bad_hash,         min_level: MALICIOUS }

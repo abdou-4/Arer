@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
+from .history.store import HistoryStore, logic_hash, rescore
 from .loader import LoadError, is_mail_candidate, load_any
 from .models import Level, Verdict
 from .pipeline import run_pipeline
@@ -52,6 +53,7 @@ class Evaluation:
     errors: list[str]
     unlabeled: int = 0
     duplicates: int = 0
+    stale: int = 0              # history rows made by older analyzer logic or lists
 
 
 def _label_of(path: Path, root: Path, overrides: dict[str, str]) -> str | None:
@@ -78,8 +80,32 @@ def _read_overrides(root: Path) -> dict[str, str]:
     return out
 
 
+def evaluate_history(cfg: Config, only: str = "all", include_history: bool = False) -> Evaluation:
+    """Re-score every LABELED scan in your history with today's rules.yaml. Instant, and needs no e-mail files."""
+    ev = Evaluation([], [])
+    store = HistoryStore.open(cfg.history.db_path, readonly=True)
+    if store is None:
+        ev.errors.append(f"no history database at {cfg.history.db_path} yet (use `arer label` or `arer history import`)")
+        return ev
+    try:
+        current = logic_hash(cfg)
+        for row in store.labeled():
+            if row.logic_hash != current:
+                ev.stale += 1
+            v = rescore(store, row, cfg, drop_prefixes=() if include_history else ("history.",))
+            r = Result(Path(row.name or row.sha256[:12]), row.label, v, source="history")
+            if only == "all" or r.split == only:
+                ev.results.append(r)
+    finally:
+        store.close()
+    return ev
+
+
 def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None = None,
-             skip_dirs: set[str] | None = None) -> Evaluation:
+             skip_dirs: set[str] | None = None, include_history: bool = False) -> Evaluation:
+    skip = set(skip or ())
+    if not include_history:
+        skip.add("history")        # your own history would leak campaign siblings into the test
     overrides = _read_overrides(root)
     skip_dirs = {d.lower() for d in (skip_dirs or set())}
     files = sorted(p for p in root.rglob("*") if is_mail_candidate(p)
@@ -96,7 +122,7 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
         except LoadError as e:
             ev.errors.append(f"{safe_text(p.name)}: {safe_text(e, 120)}")
             continue
-        verdict = run_pipeline(email, cfg, skip=skip or set())
+        verdict = run_pipeline(email, cfg, skip=skip)
         if verdict.sha256 and verdict.sha256 in seen:          # same email twice (eml + its parsed json)
             ev.duplicates += 1
             continue
@@ -145,6 +171,9 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
     L.append(f"Samples: {len(phish)} phishing, {len(legit)} legitimate"
              + (f"   ({ev.duplicates} duplicates skipped)" if ev.duplicates else "")
              + (f"   ({ev.unlabeled} files outside phish/ or legit/ ignored)" if ev.unlabeled else ""))
+    if ev.stale:
+        L.append(f"NOTE: {ev.stale} saved scans were made by older analyzer logic or word lists. Their stored findings are re-scored "
+                 "with today's weights, but new rules did not run on them. Re-scan the original e-mails (arer history import) for exact results.")
     if min(len(phish), len(legit)) < SMALL_SAMPLE:
         L.append(f"WARNING: fewer than {SMALL_SAMPLE} samples in a class. Treat these numbers as a rough guide, not proof.")
     if not phish or not legit:

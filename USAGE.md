@@ -22,6 +22,8 @@ arer = "arer.cli:main"
 arer parse <file-or-folder>     # .eml/.msg  ->  JSON files        (your original tool)
 arer scan  <file-or-folder>...  # .eml/.msg/.json  ->  verdict     (parse + analyze in one step)
 arer eval  [data/samples]       # score ALL labeled samples, report detection and false alarms
+arer label FILE phish|legit     # teach arer: label an e-mail (saves it to your private history)
+arer history list|stats|import|forget   # look after that history
 arer feeds update               # download the phishing blocklists (the ONLY command that uses the internet)
 arer feeds status               # which blocklists are loaded, and how old they are
 ```
@@ -49,7 +51,8 @@ arer scan data/samples/phish -r                      # include sub-folders
 | `--out DIR` | Save `<name>.report.json` for every email. |
 | `--json FILE` | Save the report for a single email. |
 | `--raw` | Keep real URLs and IPs in saved JSON. By default they are defanged. |
-| `--skip NAME` | Turn off an analyzer, for example `--skip demo`. Repeatable. |
+| `--skip NAME` | Turn off an analyzer, for example `--skip body`. Repeatable. |
+| `--save` / `--no-save` | Remember this scan in your private history (see below). Default comes from `config/history.yaml` (`auto_save`, normally off). |
 | `--trust TEXT` | Your own mail server's name, so the parser can find `sender_ip`. |
 | `--config DIR` | Use a different config folder. |
 | `-v` (before the command) | Debug logging: `arer -v scan x.eml`. |
@@ -98,6 +101,41 @@ Findings
 arer scan data/samples/phish -q || echo "phishing found or error"
 ```
 
+## Your private history: `arer label` and `arer history`
+
+`arer` can remember what you scan and what you decided about it, in `data/history.db` (add it to `.gitignore`, and **back it up**: unlike the blocklist index it holds the labels you made). It stores a scan's SHA-256, date, sender domain, verdict, the findings and a *hashed* sender address, link domains and attachment hashes. **It never stores bodies, subjects, recipients or attachments.**
+
+```bash
+arer scan mail.eml --save            # remember this scan
+arer label mail.eml phish            # scan (if needed), save, and label it. Also: legit, or none to clear
+arer label 02444d20e8d2 legit        # label a saved scan by 6 or more characters of its SHA-256
+arer history list [--label phish]    # recent saved scans
+arer history stats                   # counts, how many rows are stale, whether first-time-sender is active
+arer history import data/samples     # save and label every sample in phish/ and legit/ (folder names = labels)
+arer history forget 02444d20e8d2     # delete one scan completely
+```
+
+**What it teaches (only YOUR labels count, never the tool's own verdicts, so a wrong guess cannot reinforce itself):**
+
+| Finding | Meaning | Effect |
+|---|---|---|
+| `history.known_bad_sender` | This exact address (full strength), or its domain (80%), sent phishing you labelled. | +30 |
+| `history.known_bad_link_domain` | A link goes to a domain seen in phishing you labelled. | +20 |
+| `history.known_bad_hash` | An attachment matches one you labelled phishing. | Forces MALICIOUS |
+| `history.new_sender` | First e-mail ever from this address. Weak, and silent until `min_scans` (50) scans are saved. | +3 |
+
+Example: a scam with nothing detectable in its text (just a Drive link from a Gmail address) scores CLEAN the first time. After you run `arer label scam.eml phish`, the scammer's **next** e-mail from that address is flagged SUSPICIOUS. It cannot catch the first one, and it does not pretend to.
+
+**Protections:** labelling one scam from `gmail.com` flags that exact address, never all of Gmail. Domains on your protected lists (`legit_domains`, free mail, mail platforms, shorteners) are never condemned at domain level, and shared hosts (`github.io`) are matched on the exact subdomain only. Re-scanning an e-mail never matches itself. `new_sender` is the least tested signal: it has no real-data measurement yet, so watch whether it adds false alarms.
+
+**Instant tuning:** a saved scan keeps its findings, not the points. Change a weight in `rules.yaml` and re-score every labeled scan at once, with no e-mail files:
+
+```bash
+arer eval --from-history              # uses only your labeled saved scans
+```
+
+If analyzer code or word lists changed since a scan was saved, the report warns that those rows are stale: their stored findings do not include the new rules, so re-scan the originals (`arer history import`) for exact numbers. `eval` ignores `history.*` signals by default, because your history may already contain a sample's campaign siblings and would inflate detection. Add `--with-history-signals` to include them.
+
 ## Measuring: `arer eval`
 
 Tuning weights by feel does not work. `arer eval` scores every sample and tells you what the numbers are.
@@ -109,6 +147,7 @@ arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept o
 arer eval --only dev           # tune on 80% of samples ...
 arer eval --only test          # ... and check on the other 20% now and then
 arer eval --skip body          # what happens if an analyzer is turned off?
+arer eval --from-history       # re-score your labeled saved scans instantly (no e-mail files)
 arer eval --config /tmp/cfg    # try a copy of config/ with different weights
 ```
 

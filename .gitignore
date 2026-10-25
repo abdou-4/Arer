@@ -9,3 +9,4 @@ data/feeds/
 *.db
 
 data/feeds/
+data/history.db

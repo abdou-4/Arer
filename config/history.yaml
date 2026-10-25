@@ -1,0 +1,5 @@
+# Your private scan history: verdicts, findings and your labels. NO email bodies, subjects or recipients are stored.
+# Keep data/history.db out of git. It holds the labels you took time to make, so back it up. It is NOT a disposable cache.
+db_path: data/history.db
+auto_save: false      # false: a scan is saved only with `arer scan --save`, `arer label` or `arer history import`
+min_scans: 50         # the "new sender" signal stays silent until this many scans are saved (cold start)

@@ -370,6 +370,7 @@ class Category(str, Enum):
     BODY = "body"
     AI = "ai"
     INTEL = "intel"          # notices about blocklist data (weight 0)
+    HISTORY = "history"      # signals from your own saved, labeled scans
 
 
 class Level(str, Enum):

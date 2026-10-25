@@ -96,6 +96,12 @@ class FeedsSettings(BaseModel):
     sources: dict[str, FeedSource] = Field(default_factory=dict)
 
 
+class HistorySettings(BaseModel):
+    db_path: Path = Path("data/history.db")
+    auto_save: bool = False             # False: only `scan --save`, `label` and `history import` write
+    min_scans: int = Field(50, ge=1)    # no "new sender" signal until this many scans are saved (cold start)
+
+
 class Override(BaseModel):
     finding: str
     min_level: Level
@@ -106,6 +112,8 @@ class Config(BaseModel):
     thresholds: Thresholds = Field(default_factory=Thresholds)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     feeds: FeedsSettings = Field(default_factory=FeedsSettings)
+    history: HistorySettings = Field(default_factory=HistorySettings)
+    config_dir: Path | None = None      # where this configuration was loaded from
     caps: dict[str, int]
     weights: dict[str, int]
     overrides: list[Override] = Field(default_factory=list)
@@ -183,6 +191,12 @@ def load_config(config_dir: str | Path | None = None) -> Config:
         except yaml.YAMLError as e:
             raise ConfigError(f"feeds.yaml is not valid YAML: {e}") from e
         data["feeds"] = fdata
+    history_file = base / "history.yaml"
+    if history_file.is_file():
+        try:
+            data["history"] = yaml.safe_load(history_file.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as e:
+            raise ConfigError(f"history.yaml is not valid YAML: {e}") from e
 
     try:
         cfg = Config.model_validate(data)
@@ -192,6 +206,10 @@ def load_config(config_dir: str | Path | None = None) -> Config:
     env = os.environ.get("PHISHSCOPE_FEEDS")
     d = Path(env) if env else cfg.feeds.data_dir
     cfg.feeds.data_dir = d if d.is_absolute() else (base.resolve().parent / d)
+    cfg.config_dir = base.resolve()
+    henv = os.environ.get("PHISHSCOPE_HISTORY")
+    hp = Path(henv) if henv else cfg.history.db_path
+    cfg.history.db_path = hp if hp.is_absolute() else (base.resolve().parent / hp)
     for s in cfg.feeds.sources.values():
         if s.path and not Path(s.path).is_absolute():
             s.path = str(base.resolve().parent / s.path)
