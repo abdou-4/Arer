@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "Arer"
 version = "0.0.1"
 authors = [
-  { name="Bouali Abdelillah", email="bouali.abelillah.05@gmail.com" },
+  { name="Bouali Abdelillah", email="bouali.abelillah05@gmail.com" },
 ]
 description = "automated tool for phising detection"
 readme = "README.md"
