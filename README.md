@@ -195,36 +195,9 @@ _To be added. This section will describe the XAI design, training data, evaluati
 - MISP or SIEM export
 - Optional DNS and domain-age checks, off by default
 
-## Checklist: before the AI phase
-
-- [ ] Collect at least 60 modern legitimate emails (`scripts/mbox_to_eml.py`) into `data/samples/legit/modern/`; rename the `modren` folder
-- [ ] Re-run `arer eval`, save the output, and update the Evaluation table
-- [ ] Run `arer history import data/samples --skip-dir archive` so `arer eval --from-history` works
-- [ ] Investigate open findings: `url.text_href_mismatch` firing on old ham, `url.login_keywords` firing on 136 of 224 legitimate emails, and the clusters of missed Phishing Pot samples (about 6097-6128, 106-129, 12248-12252)
-- [ ] Group near-duplicate campaigns and split dev/test by campaign, not by file
-- [ ] Measure blocklist value on old samples by enabling the `_inactive` feeds once
-- [ ] Review the thresholds (20/45/70) with the larger data set
-- [ ] Define the train/test source split the AI layer will be judged on
-- [ ] Decide naming: logger names and environment variables still use the original `PHISHSCOPE_` prefix; unify with `arer`
-
-## Checklist: before publishing on GitHub
-
-- [ ] `.gitignore`: `__pycache__/`, `.pytest_cache/`, `.venv/`, `output/`, `reports/`, `data/samples/`, `data/feeds/`, `data/history.db`, `*.db`
-- [ ] Do not commit real phishing samples or your own mail. Check history for earlier commits (`git log --stat`); if any exist, rewrite history (`git filter-repo`) before pushing
-- [ ] Add small synthetic `.eml` fixtures (`examples/`) so anyone can try the tool without real samples
-- [ ] Remove `usage.txt` and leftovers; keep `USAGE.md` as the one reference
-- [ ] `pyproject.toml`: name, version, description, license, Python version, entry point `arer = "arer.cli:main"`, dev dependencies; commit `uv.lock`
-- [ ] Confirm the `LICENSE` file; credit data sources and respect feed terms (Phishing.Database is MIT; OpenPhish community feed is non-commercial)
-- [ ] Add `__main__.py` so `python -m arer` works, and a `__version__`
-- [ ] Add CI (GitHub Actions): `pytest`, `ruff`, `bandit`, `pip-audit`
-- [ ] Add `SECURITY.md` (how to report issues, and the threat model above) and `CHANGELOG.md`
-- [ ] Add a terminal recording or screenshot of a scan to this README
-- [ ] Move the two checklists out of this README (for example to `docs/ROADMAP.md`) once done
-- [ ] Tag a release
-
 ## Data sources and credits
 
-- Phishing samples: [Phishing Pot](https://github.com/rf-peixoto/phishing_pot) (check its terms)
+- Phishing samples: [Phishing Pot](https://github.com/rf-peixoto/phishing_pot)
 - Legitimate mail (evaluation only): Apache SpamAssassin public corpus
 - Blocklists: [Phishing.Database](https://github.com/Phishing-Database/Phishing.Database) (MIT); OpenPhish community feed (optional, non-commercial)
 - Email parsing: [mail-parser](https://github.com/SpamScope/mail-parser)
