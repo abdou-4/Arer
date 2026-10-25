@@ -1,6 +1,6 @@
 # Arer — Explainable AI for Phishing Email Detection
 
-AA privacy-first email threat detection engine built for transparent, evidence-driven security analysis.
+### privacy-first email threat detection engine built for transparent, evidence-driven security analysis.
 
 Arer is a local-first phishing email triage tool that analyzes .eml, .msg, and JSON email data using independent security analyzers, threat-intelligence blocklists, and configurable risk scoring. Every verdict is backed by traceable findings and supporting evidence.
 
