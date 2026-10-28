@@ -1,12 +1,12 @@
 # Arer — Explainable AI for Phishing Email Detection
 
-### privacy-first email threat detection engine built for transparent, evidence-driven security analysis.
+### A privacy-conscious, evidence-driven email security tool built around static analysis and configurable risk scoring.
 
-Arer is a local-first phishing email triage tool that analyzes .eml, .msg, and JSON email data using independent security analyzers, threat-intelligence blocklists, and configurable risk scoring. Every verdict is backed by traceable findings and supporting evidence.
+Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`, and JSON email data using independent security analyzers, local threat-intelligence blocklists, and configurable scoring rules. Each verdict includes traceable findings and supporting evidence, so a scan can be reviewed instead of treated as a black-box decision.
 
-Current: Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, and evaluation tooling.
+**Current phase:** Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, and a repeatable evaluation harness.
 
-Roadmap: Machine learning and Explainable AI (XAI) to investigate phishing patterns, improve detection, and make model predictions interpretable.
+**Future work:** Machine learning and Explainable AI (XAI). The XAI layer is planned and is not implemented in the current phase.
 
 > Full command reference: **[USAGE.md](USAGE.md)**
 
@@ -80,7 +80,7 @@ Findings
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-username>/arer.git
+git clone https://github.com/abdou-4/Arer.git
 cd arer
 uv sync                                  # developed on Python 3.13
 
@@ -152,20 +152,59 @@ Treating every input as hostile was a design requirement from the start.
 
 ## Evaluation
 
-Data: community phishing samples from [Phishing Pot](https://github.com/rf-peixoto/phishing_pot), the public SpamAssassin ham corpus (2002-2003, anonymised), and my own inbox.
+The latest evaluation run contains **1,350 emails**: 690 samples from [Phishing Pot](https://github.com/rf-peixoto/phishing_pot) and 660 legitimate emails from a modern personal-mail sample (`legit/mine_modern` in the report).
 
-Last full run (Phase 4c):
+Phishing Pot is a community-collected phishing feed, and its samples can include spam or other unwanted messages that are not necessarily credential theft or malicious phishing. The evaluation should therefore be read as a test against the available labeled corpus, not as a perfect ground-truth measure of real-world phishing. During manual follow-up, some messages missed by Arer were also not flagged as phishing by commercial `.eml` analyzers. This is useful comparative context, but it does not independently establish that those messages are benign or that the tools are equivalent.
 
-| Set | Result |
-|---|---|
-| Phishing Pot, 118 samples | 84 reached `SUSPICIOUS` or higher (71.2%) |
-| Modern legitimate mail, 10 emails | 0 flagged. With so few samples the 95% range still allows up to about 28%, so this is a sanity check, not a rate |
+### Results at the current verdict thresholds
 
-> Refresh this table after the next `arer eval` run. Blocklists and the free-mail scam rules were added after it.
+| Verdict threshold | Phishing samples flagged | Legitimate emails flagged | Observed precision within this labeled test |
+|---|---:|---:|---:|
+| `SUSPICIOUS` (20+) | 507 / 690 (73.5%) | 0 / 660 (0.0%) | 100% |
+| `LIKELY_PHISHING` (45+) | 31 / 690 (4.5%) | 0 / 660 (0.0%) | 100% |
+| `MALICIOUS` (70+) | 3 / 690 (0.4%) | 0 / 660 (0.0%) | 100% |
 
-The blocklist stage was checked against the live feeds, not just test data: 500 of 500 randomly chosen listed URLs were detected (with the http/https scheme flipped), and 301 well-known domains in 4 URL shapes each produced no false positives.
+At the current `SUSPICIOUS` threshold, Arer flags 507 of the 690 samples labeled phishing and leaves 183 below the threshold. No legitimate emails were flagged in this run. The report's 95% range for the legitimate-mail flag rate is approximately 0–1%, so zero observed false positives does **not** establish a zero real-world false-positive rate.
 
-**Honest caveats.** The SpamAssassin archive is old and anonymised (`user@localhost` addresses, no authentication results), so it is excluded from headline numbers and used only as a stress test. Consecutive Phishing Pot samples are often the same campaign, so 118 samples is fewer independent cases than it looks. The modern legitimate set is the weakest part and the main thing to grow.
+The higher-threshold rows describe how many phishing-labeled samples reached each verdict level; they are not separate model configurations.
+
+### Why the current threshold is 20
+
+The score sweep shows a clear trade-off between catching more phishing-labeled samples and generating false alarms on legitimate mail:
+
+| Minimum score | Phishing samples caught | Legitimate emails flagged |
+|---:|---:|---:|
+| 5 | 94.8% | 32.4% |
+| 10 | 88.0% | 13.8% |
+| 15 | 80.0% | 0.3% |
+| **20 (current `SUSPICIOUS`)** | **73.5%** | **0.0%** |
+| 25 | 64.2% | 0.0% |
+| 30 | 50.4% | 0.0% |
+| 35 | 45.7% | 0.0% |
+| 40 | 17.4% | 0.0% |
+
+**Threshold 20 is the current operating point because it prioritizes avoiding false alarms on legitimate email while retaining useful detection coverage.** In this run, lowering the threshold to 15 increases coverage by 6.5 percentage points, but introduces a measured false-alarm rate of 0.3%; lowering it to 10 raises detection to 88.0% while flagging 13.8% of the legitimate set. At threshold 5, almost one-third of the legitimate set is flagged. Threshold 20 is therefore a deliberate precision-oriented choice for this rule-based phase, not a claim that 20 is universally optimal.
+
+These numbers depend on the composition and labels of the available corpus. Because some Phishing Pot messages may be spam rather than phishing, the measured detection rate is best described as coverage of the phishing-labeled samples in this evaluation, not a definitive estimate of real-world phishing recall.
+
+### What the findings show
+
+The report identifies signals that are useful on this sample and others that are noisy:
+
+- `auth.dmarc_no_policy` fired on 467 / 690 phishing-labeled samples and none of the legitimate emails in this run.
+- `sender.shared_domain` fired on 339 / 690 phishing-labeled samples and none of the legitimate emails in this run.
+- `body.hidden_text` fired on 458 / 690 phishing-labeled samples, but also on 428 / 660 legitimate emails. It needs context and should not be treated as a decisive signal by itself.
+- `headers.returnpath_mismatch` and `headers.msgid_domain_mismatch` also fired frequently on legitimate mail in this evaluation, so their contribution needs to be considered in combination with other evidence.
+
+These are observed firing frequencies, not proof that any individual finding causes a correct or incorrect verdict. Findings interact through weights, confidence values, and category caps.
+
+### Interpretation and next phase
+
+The current results reflect extensive rule tuning within the signals available to a static, rule-based detector. Repeated tuning has kept detection in roughly the 70–75% range at the current conservative operating point. Further weight changes may move the trade-off, but they can also increase false alarms without addressing patterns the current rules do not represent.
+
+The next planned research phase is the machine-learning and Explainable AI (XAI) work. It will be evaluated against the current rule-based baseline to determine whether it improves detection and how its predictions can be interpreted. XAI is planned work and is not part of the current implementation.
+
+The blocklist stage was separately checked against live feeds: 500 of 500 randomly selected listed URLs were detected with the HTTP/HTTPS scheme flipped, and 301 well-known domains in four URL shapes each produced no false positives. These are separate blocklist checks, not additional phishing-detection results from the 1,350-email evaluation above.
 
 ## Engineering notes
 
@@ -202,7 +241,6 @@ _To be added. This section will describe the XAI design, training data, evaluati
 ## Data sources and credits
 
 - Phishing samples: [Phishing Pot](https://github.com/rf-peixoto/phishing_pot)
-- Legitimate mail (evaluation only): Apache SpamAssassin public corpus
 - Blocklists: [Phishing.Database](https://github.com/Phishing-Database/Phishing.Database) (MIT); OpenPhish community feed (optional, non-commercial)
 - Email parsing: [mail-parser](https://github.com/SpamScope/mail-parser)
 
