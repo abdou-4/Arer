@@ -131,6 +131,22 @@ class Body(Analyzer):
                     "body.hidden_text", "Text hidden from the reader (invisible styling or zero-width characters)",
                     0.2 if bulk else 0.8, hidden_chars=hidden_n, zero_width=zw, sample=info.hidden_text[:120]))
 
+            # junk HTML: made-up tags, repeated DOCTYPEs, padding tags, mass hidden elements (spam-filter evasion)
+            signs = []
+            if info.unknown_tags >= 3:
+                signs.append(f"{info.unknown_tags} made-up tag names")
+            if info.doctypes >= 3:
+                signs.append(f"{info.doctypes} DOCTYPE declarations")
+            if info.filler_tags >= 20 and len(info.visible_text) < 60:
+                signs.append(f"{info.filler_tags} padding tags")
+            if info.hidden_elements >= 20:
+                signs.append(f"{info.hidden_elements} hidden elements")
+            if signs:
+                out.append(self.finding(
+                    "body.html_obfuscation", "HTML padded with junk to evade filters: " + ", ".join(signs),
+                    1.0 if len(signs) >= 2 else 0.7, signs=signs, background_images=info.bg_images,
+                    visible_chars=len(info.visible_text)))
+
             # image-only email
             if info.img_count >= 1 and len(info.visible_text) < 40 and len(plain.strip()) < 40:
                 out.append(self.finding("body.image_only", "Message is just images, with almost no text",

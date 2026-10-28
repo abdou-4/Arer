@@ -73,9 +73,15 @@ class Urls(Analyzer):
                 shown = m.group(1).lower()
                 # a click-tracker usually carries the real destination inside its own URL: soften, don't ignore
                 tracked = shown in unquote(unquote(href)).lower() or registrable(shown) in unquote(unquote(href)).lower()
-                conf = (0.4 if bulk else 1.0) * (0.3 if tracked else 1.0)
+                # The click goes to the sender's OWN domain (Discord: text dis.gd -> click.discord.com). That is only
+                # deceptive when the text names a well-known site ("paypal.com" -> evil.example), so soften otherwise.
+                shown_reg = registrable(shown)
+                known_shown = shown_reg in legit or any(b in shown_reg.split(".")[0] for b in brands)
+                own_target = bool(from_reg) and registrable(target) == from_reg and not known_shown
+                conf = (0.4 if bulk else 1.0) * (0.3 if (tracked or own_target) else 1.0)
                 hit("url.text_href_mismatch", conf,
-                    f"Link text shows {shown} but goes to {target}" + (" (looks like a click-tracker)" if tracked else ""),
+                    f"Link text shows {shown} but goes to {target}"
+                    + (" (looks like a click-tracker)" if tracked else " (the sender's own domain)" if own_target else ""),
                     f"{text[:80]} -> {href[:120]}")
 
         # ---- per-URL rules ------------------------------------------------ #

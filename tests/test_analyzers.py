@@ -60,7 +60,7 @@ def test_lookalike_clean(host):
 
 
 # -------------------------------- auth ------------------------------------ #
-GOOD = "mx.google.com; dkim=pass header.i=@x.com; spf=pass (google.com: ok) smtp.mailfrom=x.com; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=x.com"
+GOOD = "mx.google.com; dkim=pass header.i=@example.com; spf=pass (google.com: ok) smtp.mailfrom=x.com; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=x.com"
 
 def test_auth_all_pass_is_quiet():
     assert ids(Auth(), mk(auth=GOOD)) == {}

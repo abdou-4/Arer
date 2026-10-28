@@ -24,6 +24,16 @@ _HIDDEN = re.compile(
 _WHITE = re.compile(r"(?:^|;)\s*color\s*:\s*(?:#fff(?:fff)?|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))\s*(?:;|!|$)", re.I)
 _WS = re.compile(r"\s+")
 
+# tag names real e-mail HTML uses (HTML5 plus the legacy ones old mail clients still write)
+_KNOWN = set("""a abbr acronym address area article aside audio b base basefont bdi bdo big blockquote body br button canvas
+caption center cite code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed fieldset figcaption
+figure font footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend
+li link main map mark marquee menu meta meter nav nobr noframes noscript object ol optgroup option output p param picture
+pre progress q rp rt ruby s samp script section select small source span strike strong style sub summary sup table tbody
+td template textarea tfoot th thead time title tr track tt u ul var video wbr xml xmp center""".split())
+# tags that never carry message text but are used to pad a message with junk
+_FILLER = {"textarea", "option", "basefont", "rt", "noframes", "xmp", "plaintext"}
+
 
 @dataclass
 class HtmlInfo:
@@ -33,6 +43,11 @@ class HtmlInfo:
     hidden_text: str = ""
     img_count: int = 0
     has_password_input: bool = False
+    unknown_tags: int = 0               # distinct made-up tag names, e.g. <CZVVGQPYUH>
+    doctypes: int = 0                   # a real message has one <!DOCTYPE>
+    filler_tags: int = 0                # textarea/option/basefont/... used as padding
+    hidden_elements: int = 0            # elements styled display:none and friends
+    bg_images: int = 0                  # elements with a CSS background image
 
 
 class _Reader(HTMLParser):
@@ -47,6 +62,7 @@ class _Reader(HTMLParser):
         self.vis: list[str] = []
         self.hid: list[str] = []
         self.vis_len = self.hid_len = 0
+        self.unknown: set[str] = set()
 
     def handle_starttag(self, tag, attrs):
         self.tags += 1
@@ -57,6 +73,14 @@ class _Reader(HTMLParser):
         style = a.get("style", "")
         hidden = parent_hidden or ("hidden" in a) or bool(_HIDDEN.search(style)) or bool(_WHITE.search(style))
 
+        if tag not in _KNOWN and ":" not in tag and "-" not in tag and len(self.unknown) < 50:
+            self.unknown.add(tag)                        # o:p, v:shape and custom-elements are normal; random names are not
+        if tag in _FILLER:
+            self.info.filler_tags += 1
+        if _HIDDEN.search(style) or "hidden" in a:
+            self.info.hidden_elements += 1
+        if re.search(r"background(?:-image)?\s*:[^;]*url\(", style, re.I) or a.get("background"):
+            self.info.bg_images += 1
         if tag == "img":
             self.info.img_count += 1
         elif tag == "a" and "href" in a and len(self.info.links) < MAX_LINKS:
@@ -89,6 +113,10 @@ class _Reader(HTMLParser):
                 break
         self.skip = any(t in ("script", "style") for t, _ in self.stack)
 
+    def handle_decl(self, decl):
+        if decl.lower().startswith("doctype"):
+            self.info.doctypes += 1
+
     def handle_data(self, data):
         if self.skip or self.tags > MAX_TAGS:
             return
@@ -109,6 +137,7 @@ def parse_html(html: str) -> HtmlInfo:
         r.close()
     except Exception:                                    # noqa: BLE001 - malformed HTML must never crash a scan
         pass
+    r.info.unknown_tags = len(r.unknown)
     r.info.visible_text = _WS.sub(" ", "".join(r.vis)).strip()
     r.info.hidden_text = _WS.sub(" ", "".join(r.hid)).strip()
     return r.info

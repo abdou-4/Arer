@@ -31,6 +31,7 @@ class AuthResult:
     dmarc: str | None = None
     dmarc_policy: str | None = None
     raw: str = ""
+    dkim_signers: list = field(default_factory=list)       # [(result, signing domain)]
     from_received_spf: bool = False
     seen: dict = field(default_factory=dict)
 
@@ -50,6 +51,15 @@ def parse_auth_results(header: str) -> AuthResult:
     for kind, val in _RESULT.findall(clean):
         found.setdefault(kind.lower(), []).append(val.lower())
 
+    signers = []
+    for seg in clean.split(";"):                          # Microsoft writes header.d=, Gmail writes header.i=@domain
+        m = re.search(r"\bdkim\s*=\s*([a-z]+)", seg, re.I)
+        if m:
+            d = (re.search(r"header\.d\s*=\s*([\w.\-]+)", seg, re.I)
+                 or re.search(r"header\.i\s*=\s*@?(?:[\w.+\-]+@)?([\w.\-]+)", seg, re.I))
+            if d:
+                signers.append((m.group(1).lower(), d.group(1).lower().strip(".")))
+
     dkim = None
     if "dkim" in found:
         vals = found["dkim"]
@@ -57,6 +67,7 @@ def parse_auth_results(header: str) -> AuthResult:
     return AuthResult(
         authserv=authserv.lower(), spf=(found.get("spf") or [None])[0], dkim=dkim,
         dmarc=(found.get("dmarc") or [None])[0], dmarc_policy=policy, raw=text[:300], seen=found,
+        dkim_signers=signers,
     )
 
 
@@ -114,6 +125,20 @@ class Auth(Analyzer):
             out.append(self.finding("auth.dkim_fail", "DKIM signature failed verification", conf, **ev))
         elif res.dkim == "none":
             out.append(self.finding("auth.dkim_none", "Message is not DKIM-signed", conf, **ev))
+
+        # DKIM "pass" proves who SIGNED the message, not that the signer is the sender. Spam rings sign with a random
+        # throw-away domain or a free tenant (x.onmicrosoft.com). Signing by a known mail platform is normal.
+        if res.dkim == "pass" and email.from_domain and not res.from_received_spf:
+            from ..util.domains import registrable
+            L = cfg.lists
+            passing = [d for r, d in res.dkim_signers if r == "pass"]
+            from_reg = registrable(email.from_domain)
+            if passing and not any(registrable(d) == from_reg or registrable(d) in L.get("mail_platforms", frozenset())
+                                   for d in passing):
+                out.append(self.finding(
+                    "auth.dkim_misaligned",
+                    f"DKIM is signed by {passing[0]}, which is not the sender's domain ({email.from_domain})",
+                    0.35 if email.is_bulk else 0.7, signers=passing[:3], from_domain=email.from_domain))
 
         if res.dmarc == "fail":
             out.append(self.finding("auth.dmarc_fail", "DMARC failed for the From domain", conf, **ev))

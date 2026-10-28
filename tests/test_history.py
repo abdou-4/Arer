@@ -268,7 +268,7 @@ def test_auto_save_from_config(tmp_path):
     cfgdir = tmp_path / "config"; shutil.copytree(base_cfg.config_dir, cfgdir)
     (cfgdir / "history.yaml").write_text(f"db_path: {tmp_path / 'auto.db'}\nauto_save: true\nmin_scans: 50\n")
     f = tmp_path / "m.eml"; f.write_bytes(MAIL)
-    r = CliRunner().invoke(main, ["scan", str(f), "--config", str(cfgdir)], env={"PHISHSCOPE_FEEDS": str(tmp_path / "nf")})
+    r = CliRunner().invoke(main, ["scan", str(f), "--config", str(cfgdir)], env={"PHISHSCOPE_FEEDS": str(tmp_path / "nf"), "PHISHSCOPE_HISTORY": ""})
     assert "history: saved" in r.output and (tmp_path / "auto.db").exists()
-    r = CliRunner().invoke(main, ["scan", str(f), "--no-save", "--config", str(cfgdir)], env={"PHISHSCOPE_FEEDS": str(tmp_path / "nf")})
+    r = CliRunner().invoke(main, ["scan", str(f), "--no-save", "--config", str(cfgdir)], env={"PHISHSCOPE_FEEDS": str(tmp_path / "nf"), "PHISHSCOPE_HISTORY": ""})
     assert "history: saved" not in r.output

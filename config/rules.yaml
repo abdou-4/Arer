@@ -34,6 +34,7 @@ weights:
   auth.spf_softfail: 8
   auth.dkim_fail: 10
   auth.dkim_none: 3
+  auth.dkim_misaligned: 6
   auth.dmarc_fail: 10
   auth.dmarc_no_policy: 5
   auth.results_missing: 5
@@ -55,7 +56,7 @@ weights:
   headers.suspicious_mailer: 5
   headers.msgid_domain_mismatch: 2
   headers.msgid_bare_host: 2
-  headers.returnpath_mismatch: 5
+  headers.returnpath_mismatch: 2
   headers.missing_date: 2
   headers.parser_defects: 3
 
@@ -69,11 +70,11 @@ weights:
   url.userinfo_at: 8
   url.many_subdomains: 8
   url.punycode: 8
-  url.login_keywords: 5
+  url.login_keywords: 2
   url.not_https: 3
   url.lookalike_domain: 15
   url.free_hosting: 6
-  url.brand_mismatch: 15
+  url.brand_mismatch: 10
 
   # ---- attachment ----
   attachment.executable: 15
@@ -87,15 +88,16 @@ weights:
   attachment.known_malicious_hash: 40
 
   # ---- body ----
-  body.urgency_words: 5
-  body.credential_words: 8
-  body.hidden_text: 8
+  body.urgency_words: 3
+  body.credential_words: 4
+  body.hidden_text: 4
   body.password_form: 12
-  body.image_only: 5
+  body.image_only: 2
   body.generic_greeting: 3
   body.callback_lure: 15
   body.prize_lure: 12
   body.obfuscated_subject: 6
+  body.html_obfuscation: 8
 
   # ---- history: signals from your OWN saved scans (only your labels teach it, never the tool's own verdicts) ----
   history.new_sender: 3
