@@ -152,59 +152,64 @@ Treating every input as hostile was a design requirement from the start.
 
 ## Evaluation
 
-The latest evaluation run contains **1,350 emails**: 690 samples from [Phishing Pot](https://github.com/rf-peixoto/phishing_pot) and 660 legitimate emails from a modern personal-mail sample (`legit/mine_modern` in the report).
+The final evaluation run contains **1,350 emails**: 690 samples from [Phishing Pot](https://github.com/rf-peixoto/phishing_pot) and 660 legitimate emails from a modern personal-mail sample (`legit/mine_modern` in the report).
 
-Phishing Pot is a community-collected phishing feed, and its samples can include spam or other unwanted messages that are not necessarily credential theft or malicious phishing. The evaluation should therefore be read as a test against the available labeled corpus, not as a perfect ground-truth measure of real-world phishing. During manual follow-up, some messages missed by Arer were also not flagged as phishing by commercial `.eml` analyzers. This is useful comparative context, but it does not independently establish that those messages are benign or that the tools are equivalent.
+Phishing Pot is a community-collected phishing feed, and its samples can include spam or other unwanted messages that are not necessarily credential theft or malicious phishing. The results should therefore be read as performance on this labeled corpus, not as a definitive estimate of real-world phishing detection. During manual follow-up, some messages missed by Arer were also not flagged as phishing by commercial `.eml` analyzers. This is useful comparative context, but it does not independently establish that those messages are benign or that the tools are equivalent.
 
-### Results at the current verdict thresholds
+### Final results
 
-| Verdict threshold | Phishing samples flagged | Legitimate emails flagged | Observed precision within this labeled test |
+| Verdict threshold | Phishing samples flagged | Legitimate emails flagged | Observed precision in this test |
 |---|---:|---:|---:|
-| `SUSPICIOUS` (20+) | 507 / 690 (73.5%) | 0 / 660 (0.0%) | 100% |
-| `LIKELY_PHISHING` (45+) | 31 / 690 (4.5%) | 0 / 660 (0.0%) | 100% |
-| `MALICIOUS` (70+) | 3 / 690 (0.4%) | 0 / 660 (0.0%) | 100% |
+| `SUSPICIOUS` (20+) | 504 / 690 (73.0%) | 0 / 660 (0.0%) | 100% |
+| `LIKELY_PHISHING` (45+) | 25 / 690 (3.6%) | 0 / 660 (0.0%) | 100% |
+| `MALICIOUS` (70+) | 2 / 690 (0.3%) | 0 / 660 (0.0%) | 100% |
 
-At the current `SUSPICIOUS` threshold, Arer flags 507 of the 690 samples labeled phishing and leaves 183 below the threshold. No legitimate emails were flagged in this run. The report's 95% range for the legitimate-mail flag rate is approximately 0–1%, so zero observed false positives does **not** establish a zero real-world false-positive rate.
+At the current `SUSPICIOUS` threshold, Arer flags **504 of 690** phishing-labeled samples; **186** remain below the threshold. None of the 660 legitimate emails was flagged. The report gives an approximate 95% range of 0–1% for the legitimate-mail flag rate, so zero observed false positives in this sample does **not** establish a zero real-world false-positive rate.
 
-The higher-threshold rows describe how many phishing-labeled samples reached each verdict level; they are not separate model configurations.
+The higher-threshold rows show how many phishing-labeled samples reached each verdict level or higher. They are not separate model configurations. In this run, phishing scores had a median of 29 (range 0–77), while legitimate-mail scores had a median of 1 (range 0–12).
 
 ### Why the current threshold is 20
 
-The score sweep shows a clear trade-off between catching more phishing-labeled samples and generating false alarms on legitimate mail:
+The score sweep shows the trade-off between catching more phishing-labeled samples and generating false alarms on legitimate mail:
 
 | Minimum score | Phishing samples caught | Legitimate emails flagged |
 |---:|---:|---:|
-| 5 | 94.8% | 32.4% |
-| 10 | 88.0% | 13.8% |
-| 15 | 80.0% | 0.3% |
-| **20 (current `SUSPICIOUS`)** | **73.5%** | **0.0%** |
-| 25 | 64.2% | 0.0% |
-| 30 | 50.4% | 0.0% |
-| 35 | 45.7% | 0.0% |
-| 40 | 17.4% | 0.0% |
+| 5 | 94.2% | 12.6% |
+| 10 | 87.0% | 2.0% |
+| 15 | 78.6% | 0.0% |
+| **20 (current `SUSPICIOUS`)** | **73.0%** | **0.0%** |
+| 25 | 62.5% | 0.0% |
+| 30 | 48.1% | 0.0% |
+| 35 | 45.1% | 0.0% |
+| 40 | 16.5% | 0.0% |
+| 45 | 3.6% | 0.0% |
 
-**Threshold 20 is the current operating point because it prioritizes avoiding false alarms on legitimate email while retaining useful detection coverage.** In this run, lowering the threshold to 15 increases coverage by 6.5 percentage points, but introduces a measured false-alarm rate of 0.3%; lowering it to 10 raises detection to 88.0% while flagging 13.8% of the legitimate set. At threshold 5, almost one-third of the legitimate set is flagged. Threshold 20 is therefore a deliberate precision-oriented choice for this rule-based phase, not a claim that 20 is universally optimal.
+**Threshold 20 is the current operating point because it retains useful coverage while producing no observed false alarms in the legitimate sample.** Lowering it to 15 raises phishing coverage from 73.0% to 78.6% without adding false alarms in this particular run, but the threshold sweep alone does not establish that the same result will hold on other mail. Lowering it to 10 raises coverage to 87.0% but flags 2.0% of legitimate emails; at 5, 12.6% of legitimate emails are flagged. Threshold 20 is therefore a conservative, precision-oriented choice for the current rule-based phase, not a universally optimal threshold.
 
-These numbers depend on the composition and labels of the available corpus. Because some Phishing Pot messages may be spam rather than phishing, the measured detection rate is best described as coverage of the phishing-labeled samples in this evaluation, not a definitive estimate of real-world phishing recall.
+These results depend on the composition and labels of the evaluation corpus. Since some Phishing Pot messages may be spam or other unwanted mail rather than phishing, the 73.0% figure is best described as coverage of the phishing-labeled samples in this evaluation.
 
 ### What the findings show
 
-The report identifies signals that are useful on this sample and others that are noisy:
+The final report highlights several useful signals and several noisy ones:
 
-- `auth.dmarc_no_policy` fired on 467 / 690 phishing-labeled samples and none of the legitimate emails in this run.
-- `sender.shared_domain` fired on 339 / 690 phishing-labeled samples and none of the legitimate emails in this run.
-- `body.hidden_text` fired on 458 / 690 phishing-labeled samples, but also on 428 / 660 legitimate emails. It needs context and should not be treated as a decisive signal by itself.
-- `headers.returnpath_mismatch` and `headers.msgid_domain_mismatch` also fired frequently on legitimate mail in this evaluation, so their contribution needs to be considered in combination with other evidence.
+- `auth.dmarc_no_policy` fired on 467 / 690 phishing-labeled samples and none of the legitimate emails.
+- `sender.shared_domain` fired on 339 / 690 phishing-labeled samples and none of the legitimate emails.
+- `auth.spf_fail` fired on 279 / 690 phishing-labeled samples and none of the legitimate emails.
+- `body.hidden_text` fired on 302 / 690 phishing-labeled samples and none of the legitimate emails in this run.
+- `headers.returnpath_mismatch` fired on 108 / 690 phishing-labeled samples and 187 / 660 legitimate emails.
+- `headers.msgid_domain_mismatch` fired on 47 / 690 phishing-labeled samples and 158 / 660 legitimate emails.
+- `body.hidden_preheader` fired on 156 / 690 phishing-labeled samples and 428 / 660 legitimate emails, making it a particularly noisy signal in this corpus.
+- `headers.parser_defects` fired on 136 / 690 phishing-labeled samples and 160 / 660 legitimate emails.
 
-These are observed firing frequencies, not proof that any individual finding causes a correct or incorrect verdict. Findings interact through weights, confidence values, and category caps.
+Other findings that also appeared on legitimate mail include `body.image_only` (62), `body.credential_words` (24), `url.login_keywords` (10), and `url.shortener` / `url.brand_mismatch` (14 each). These frequencies show why individual findings should be interpreted in context rather than treated as decisive evidence by themselves.
+
+Finding frequencies are not verdict-level accuracy measurements. Findings interact through weights, confidence values, category caps and scoring thresholds.
 
 ### Interpretation and next phase
 
-The current results reflect extensive rule tuning within the signals available to a static, rule-based detector. Repeated tuning has kept detection in roughly the 70–75% range at the current conservative operating point. Further weight changes may move the trade-off, but they can also increase false alarms without addressing patterns the current rules do not represent.
+The final run shows that the current rule-based detector flags **73.0%** of the phishing-labeled samples at the selected threshold, with **zero observed false positives** among 660 legitimate emails. The 186 missed samples and the noisy findings indicate areas for further investigation, but changing weights alone may simply move the trade-off between coverage and false alarms.
 
-The next planned research phase is the machine-learning and Explainable AI (XAI) work. It will be evaluated against the current rule-based baseline to determine whether it improves detection and how its predictions can be interpreted. XAI is planned work and is not part of the current implementation.
-
-The blocklist stage was separately checked against live feeds: 500 of 500 randomly selected listed URLs were detected with the HTTP/HTTPS scheme flipped, and 301 well-known domains in four URL shapes each produced no false positives. These are separate blocklist checks, not additional phishing-detection results from the 1,350-email evaluation above.
+The next planned research phase is the machine-learning and Explainable AI (XAI) work. It will be evaluated against this rule-based baseline to determine whether it improves detection and how its predictions can be interpreted. XAI is planned work and is not part of the current implementation.
 
 ## Engineering notes
 
