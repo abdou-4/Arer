@@ -41,6 +41,14 @@ LIST_FILES = {
 }
 
 
+# Weights for findings that were added AFTER your rules.yaml was written. They apply only when rules.yaml does not
+# list the id, so an upgrade never overwrites your tuning and never silently scores a new finding as zero.
+DEFAULT_WEIGHTS: dict[str, int] = {
+    "body.hidden_preheader": 1,
+}
+_warned: set[str] = set()
+
+
 class ConfigError(Exception):
     """Raised when rules.yaml or a list file is missing or invalid."""
 
@@ -139,11 +147,15 @@ class Config(BaseModel):
 
     # ---- helpers used by pipeline / analyzers ---------------------------- #
     def weight_for(self, finding_id: str) -> int:
-        """Points for a finding id. Unknown ids score 0 and are logged (typo guard)."""
-        if finding_id not in self.weights:
-            log.warning("finding id '%s' has no weight in rules.yaml", finding_id)
-            return 0
-        return self.weights[finding_id]
+        """Points for a finding id: rules.yaml first, then the built-in default. Unknown ids score 0 (warned once)."""
+        if finding_id in self.weights:
+            return self.weights[finding_id]
+        if finding_id in DEFAULT_WEIGHTS:
+            return DEFAULT_WEIGHTS[finding_id]
+        if finding_id not in _warned:
+            _warned.add(finding_id)
+            log.warning("finding id '%s' has no weight in rules.yaml (scored as 0)", finding_id)
+        return 0
 
     def cap_for(self, category: str) -> int:
         return self.caps.get(category, 0)

@@ -30,7 +30,10 @@ caption center cite code col colgroup data datalist dd del details dfn dialog di
 figure font footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend
 li link main map mark marquee menu meta meter nav nobr noframes noscript object ol optgroup option output p param picture
 pre progress q rp rt ruby s samp script section select small source span strike strong style sub summary sup table tbody
-td template textarea tfoot th thead time title tr track tt u ul var video wbr xml xmp center""".split())
+td template textarea tfoot th thead time title tr track tt u ul var video wbr xml xmp center
+svg g path circle rect line polygon polyline ellipse defs use symbol clippath mask lineargradient radialgradient stop tspan text
+image pattern filter fegaussianblur title desc style math mi mo mn blink layer ilayer spacer""".split())
+# SVG icons and the like are normal in newsletters; only made-up names count
 # tags that never carry message text but are used to pad a message with junk
 _FILLER = {"textarea", "option", "basefont", "rt", "noframes", "xmp", "plaintext"}
 

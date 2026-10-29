@@ -52,8 +52,8 @@ def main(verbose: bool):
     """arer: parse emails and detect phishing, fully local."""
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
-    # mail-parser warns about every calendar invite; that is noise unless you asked for -v
-    logging.getLogger("mailparser").setLevel(logging.DEBUG if verbose else logging.ERROR)
+    # mail-parser logs every calendar invite and every undecodable header (some samples have corrupted ones): noise unless -v
+    logging.getLogger("mailparser").setLevel(logging.DEBUG if verbose else logging.CRITICAL)
 
 
 # --------------------------------------------------------------------------- #

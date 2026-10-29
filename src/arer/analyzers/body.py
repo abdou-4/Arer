@@ -126,9 +126,9 @@ class Body(Analyzer):
                 out.append(self.finding(
                     "body.hidden_text", f"Huge block of hidden text ({hidden_n} characters), used to evade spam filters",
                     1.0, hidden_chars=hidden_n, sample=info.hidden_text[:120]))
-            elif hidden_n >= 100 or zw >= 3:   # newsletters legitimately hide a short preheader
+            elif hidden_n >= 100 or zw >= 3:   # newsletters legitimately hide a short preheader: its own, low-weight finding
                 out.append(self.finding(
-                    "body.hidden_text", "Text hidden from the reader (invisible styling or zero-width characters)",
+                    "body.hidden_preheader", "Some text is hidden from the reader (a preheader, or zero-width characters)",
                     0.2 if bulk else 0.8, hidden_chars=hidden_n, zero_width=zw, sample=info.hidden_text[:120]))
 
             # junk HTML: made-up tags, repeated DOCTYPEs, padding tags, mass hidden elements (spam-filter evasion)
@@ -139,8 +139,8 @@ class Body(Analyzer):
                 signs.append(f"{info.doctypes} DOCTYPE declarations")
             if info.filler_tags >= 20 and len(info.visible_text) < 60:
                 signs.append(f"{info.filler_tags} padding tags")
-            if info.hidden_elements >= 20:
-                signs.append(f"{info.hidden_elements} hidden elements")
+            # NOT a sign: dozens of display:none / font-size:0 elements are normal in marketing templates (spacer cells,
+            # mobile/desktop toggles, preheaders, tracking pixels). Measured: it fired on 146 of 670 legitimate e-mails.
             if signs:
                 out.append(self.finding(
                     "body.html_obfuscation", "HTML padded with junk to evade filters: " + ", ".join(signs),

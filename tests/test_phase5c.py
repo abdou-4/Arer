@@ -122,3 +122,55 @@ def test_padding_tags_with_real_text_are_not_flagged():
 def test_dear_reader_and_subscriber():
     assert "body.generic_greeting" in ids(Body(), mk(text="Dear Reader, In the spring of 2024..."))
     assert "body.generic_greeting" in ids(Body(), mk(text="Dear subscriber, news"))
+
+
+# ---- regressions found by the 704 + 670 evaluation: ordinary newsletters must not look like junk HTML ----
+NEWSLETTER = ('<!DOCTYPE html><html><head><style>td{font-family:Arial}</style></head><body>'
+              '<div style="display:none;font-size:1px;max-height:0;opacity:0;overflow:hidden">Your weekly digest is here</div><table>'
+              + '<tr><td style="font-size:0;line-height:0;height:12px">&nbsp;</td></tr>' * 18
+              + '<div style="display:none;max-height:0;mso-hide:all">mobile only</div>' * 6
+              + '<tr><td>Hello Sam, here is your weekly digest with plenty of real text about this week.</td></tr>'
+              + '<svg width="16" height="16"><g><path d="M0 0h16v16H0z"/><circle cx="8" cy="8" r="4"/></g></svg>' * 3
+              + '</table><img src="https://t.example.com/p.gif" width="1" height="1" style="display:none"></body></html>')
+
+def test_marketing_newsletter_with_svg_icons_and_hidden_spacers_is_not_junk():
+    i = parse_html(NEWSLETTER)
+    assert i.hidden_elements >= 25 and i.unknown_tags == 0                       # still counted, never a sign
+    assert "body.html_obfuscation" not in ids(Body(), mk(html=NEWSLETTER, bulk=True))
+    assert "body.html_obfuscation" not in ids(Body(), mk(html=NEWSLETTER))
+
+def test_mass_hidden_elements_alone_are_not_junk():
+    assert "body.html_obfuscation" not in ids(Body(), mk(html="<p>real text here for the reader</p>" + '<div style="display:none">x</div>' * 60))
+
+def test_made_up_tag_names_still_count():
+    assert parse_html("<html><AAAA><BBBB><CCCC>text</html>").unknown_tags == 3
+
+def test_big_hidden_block_is_the_strong_finding():
+    big = '<p>Hi</p><div style="display:none">' + "xQ7kP2" * 1500 + "</div>"
+    assert ids(Body(), mk(html=big, bulk=True))["body.hidden_text"].confidence == 1.0
+
+def test_mailparser_logger_is_silenced_unless_verbose():
+    import logging
+    from click.testing import CliRunner
+    from arer.cli import main
+    CliRunner().invoke(main, ["feeds", "status"], env={"PHISHSCOPE_FEEDS": "/tmp/_none_feeds"})
+    assert logging.getLogger("mailparser").level == logging.CRITICAL
+    CliRunner().invoke(main, ["-v", "feeds", "status"], env={"PHISHSCOPE_FEEDS": "/tmp/_none_feeds"})
+    assert logging.getLogger("mailparser").level == logging.DEBUG
+
+
+def test_new_findings_use_a_builtin_default_when_rules_yaml_predates_them(caplog):
+    from arer.config import DEFAULT_WEIGHTS
+    c = cfg.model_copy(deep=True)
+    c.weights.pop("body.hidden_preheader", None)                      # an older, hand-tuned rules.yaml
+    assert c.weight_for("body.hidden_preheader") == DEFAULT_WEIGHTS["body.hidden_preheader"] == 1
+    c.weights["body.hidden_preheader"] = 4                            # the user's own value always wins
+    assert c.weight_for("body.hidden_preheader") == 4
+
+def test_unknown_ids_are_warned_only_once(caplog):
+    import logging
+    c = cfg.model_copy(deep=True)
+    with caplog.at_level(logging.WARNING, logger="phishscope.config"):
+        for _ in range(5):
+            assert c.weight_for("body.totally_new_unlisted_id") == 0
+    assert sum("totally_new_unlisted_id" in r.message for r in caplog.records) == 1

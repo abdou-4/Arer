@@ -155,14 +155,15 @@ def test_body_password_form():
     r = ids(Body(), mk(html='<form action="http://evil.net/p"><input type="password" name="pw"></form>'))
     assert r["body.password_form"].evidence["external_action"] is True
 
-def test_body_hidden_text_and_bulk_weakening():
+def test_body_hidden_preheader_and_bulk_weakening():
     hidden = '<div style="display:none">' + "preheader " * 30 + "</div><p>Hello there</p>"
-    assert ids(Body(), mk(html=hidden))["body.hidden_text"].confidence == 0.8
-    assert ids(Body(), mk(html=hidden, bulk=True))["body.hidden_text"].confidence == 0.2
+    assert ids(Body(), mk(html=hidden))["body.hidden_preheader"].confidence == 0.8
+    assert ids(Body(), mk(html=hidden, bulk=True))["body.hidden_preheader"].confidence == 0.2
+    assert "body.hidden_text" not in ids(Body(), mk(html=hidden))                  # small hidden text is not the big finding
 
 def test_body_white_text_counts_as_hidden():
     html = '<p style="color:#ffffff">' + "viagra " * 30 + "</p><p>Visible</p>"
-    assert "body.hidden_text" in ids(Body(), mk(html=html))
+    assert "body.hidden_preheader" in ids(Body(), mk(html=html))
 
 def test_body_image_only():
     assert "body.image_only" in ids(Body(), mk(html='<a href="http://x.example.net"><img src="cid:a"></a>'))
