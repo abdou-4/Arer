@@ -46,14 +46,22 @@ def collect(target: Path, recursive: bool, suffixes: set[str]) -> list[Path]:
     )
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option("-v", "--verbose", is_flag=True, help="Show debug logging.")
-def main(verbose: bool):
+@click.pass_context
+def main(ctx: click.Context, verbose: bool):
     """arer: parse emails and detect phishing, fully local."""
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
     # mail-parser logs every calendar invite and every undecodable header (some samples have corrupted ones): noise unless -v
     logging.getLogger("mailparser").setLevel(logging.DEBUG if verbose else logging.CRITICAL)
+
+    if ctx.invoked_subcommand is None:                  # bare `arer`
+        from .menu import run_menu, stdin_is_interactive   # imported here: menu.py imports this module
+        if stdin_is_interactive():
+            run_menu()
+        else:                                           # pipes, scripts, CI: just show the help
+            click.echo(ctx.get_help())
 
 
 # --------------------------------------------------------------------------- #
@@ -419,6 +427,16 @@ def feeds_status(config_dir):
             click.echo(f"{name:<30}{'yes' if spec.enabled else 'no':<9}{s.entries:>10,}  {age_txt:<10} {safe_text(spec.note, 60)}")
         else:
             click.echo(f"{name:<30}{'yes' if spec.enabled else 'no':<9}{'-':>10}  {'never':<10} {safe_text(spec.note, 60)}")
+
+
+# --------------------------------------------------------------------------- #
+# arer menu   (the interactive front door; also what bare `arer` opens in a terminal)
+# --------------------------------------------------------------------------- #
+@main.command("menu")
+def menu_cmd():
+    """Open the interactive menu."""
+    from .menu import run_menu                          # imported here: menu.py imports this module
+    run_menu()
 
 
 if __name__ == "__main__":
