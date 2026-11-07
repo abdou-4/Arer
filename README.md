@@ -4,16 +4,19 @@
 
 Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`, and JSON email data using independent security analyzers, local threat-intelligence blocklists, and configurable scoring rules. Each verdict includes traceable findings and supporting evidence, so a scan can be reviewed instead of treated as a black-box decision.
 
-**Current phase:** Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, and a repeatable evaluation harness.
+**Current phase:** Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, a repeatable evaluation harness, and an interactive menu for non-technical users.
 
 **Future work:** Machine learning and Explainable AI (XAI). The XAI layer is planned and is not implemented in the current phase.
 
-> Full command reference: **[USAGE.md](USAGE.md)**
+> 📖 Full command reference and guides: **[USAGE.md](USAGE.md)**
+
+**Jump to:** [Highlights](#highlights) · [Quick start](#quick-start) · [Interactive menu](#interactive-menu) · [Example output](#example-output) · [How it works](#how-it-works) · [What it checks](#what-it-checks) · [Configuration](#configuration) · [Security and privacy](#security-and-privacy-design) · [Evaluation](#evaluation) · [Limitations](#limitations) · [Roadmap](#roadmap)
 
 ---
 
 ## Highlights
 
+- **Easy to use.** Type `arer` and answer plain questions in an interactive menu. No commands to memorize, and the menu shows you the exact command it ran so you can learn the CLI as you go.
 - **Eight independent analyzers** (authentication, sender, headers, links, attachments, message text, blocklists, personal history). Each returns *findings*; none of them sets its own score.
 - **Explainable by construction.** Every point in a verdict traces back to a named finding with its evidence. Weights, caps, thresholds and word lists live in config files, not code.
 - **Offline blocklists.** About 1.2 million phishing domains and URLs from public feeds, held in a 27 MB hash index. Lookups take microseconds and add no measurable scan time.
@@ -21,6 +24,74 @@ Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`,
 - **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, an 80/20 dev/test split, and which findings help or hurt.
 - **Hostile-input design.** Size limits, per-analyzer timeouts, defanged output, terminal-escape filtering, and no network except one explicit command.
 - **About 190 automated tests**, including tests built from real bugs found while measuring.
+
+## Quick start
+
+```bash
+git clone https://github.com/abdou-4/Arer.git
+cd Arer
+uv sync                                  # developed on Python 3.13
+```
+
+Then choose how you want to work:
+
+| I want to... | Run |
+|---|---|
+| **Be guided with questions** (recommended for new users) | `uv run arer` |
+| Scan one email | `uv run arer scan path/to/mail.eml` |
+| Scan a folder, one line per email | `uv run arer scan path/to/folder -q` |
+| Download blocklists (optional, the only network use) | `uv run arer feeds update` |
+| Run the test suite | `uv run pytest` |
+
+> If you installed the command into your environment, you can drop the `uv run` prefix and just type `arer`.
+
+## Interactive menu
+
+Run `arer` with no arguments in a terminal and a menu opens. Pick a number, answer the questions, and Arer does the rest.
+
+```
+    __ _ _ __ ___ _ __
+   / _` | '__/ _ \ '__|
+  | (_| | | |  __/ |
+   \__,_|_|  \___|_|
+
+  Local phishing email triage
+  Scans run offline, on your computer.
+
+  What would you like to do?
+
+    1  Scan emails              Check one email, or a whole folder
+    2  Measure accuracy         Test arer on labeled samples
+    3  Label an email           Teach arer: phishing or legitimate?
+    4  My history               Saved scans, statistics, import
+    5  Blocklists               Download or check phishing blocklists
+    6  Convert emails to JSON   Turn .eml / .msg into JSON files
+    7  Help                     The commands behind this menu
+    0  Quit
+```
+
+**What makes it friendly**
+
+- **Plain questions, safe defaults.** Anything that stores data or touches the network is a yes/no question that defaults to *no*.
+- **Drag and drop.** Paste a path, drop a file into the terminal window, or use `~` for your home folder. Quotes and escaped spaces are cleaned up for you.
+- **Always a way back.** Type `q` at any prompt to go back to the menu.
+- **No hidden logic.** Every menu entry builds a normal `arer` command and runs it. You see it printed as `Running: arer scan ...`, so next time you can type it yourself.
+- **Looks right everywhere.** Only plain, bold and dim text, no colors. Set `NO_COLOR=1` to turn even that off.
+
+**Example: scanning a folder**
+
+```
+  Email file or folder to scan (q = back): ~/Downloads/suspicious
+  No emails directly in this folder, but 12 in total including sub-folders. Include sub-folders? [Y/n]: y
+  Found 12 email(s).
+  Show one short line per email, instead of full reports? [Y/n]: y
+  Remember the result in your private history? (stores no email text) [y/N]: n
+  Also save a report file (JSON) for each email? [y/N]: n
+
+  Running:  arer scan /home/you/Downloads/suspicious -r -q
+```
+
+The menu is built to be extended. Adding a new entry (an AI feature later, for example) takes one function and one decorator, see [Adding a menu entry](USAGE.md#adding-a-menu-entry).
 
 ## Example output
 
@@ -62,6 +133,8 @@ Findings
    report ─────────── defanged terminal output or JSON
 ```
 
+The menu (`menu.py`) sits in front of all of this. It collects your answers and calls the same `cli` commands as a typed command would.
+
 **Scoring in one paragraph.** Each finding has a weight from `config/rules.yaml` and a confidence between 0 and 1. A finding id counts once per email. Points are summed per category and capped (so one noisy check cannot dominate), added up to 100, and mapped to `CLEAN`, `SUSPICIOUS` (20+), `LIKELY_PHISHING` (45+) or `MALICIOUS` (70+). A few findings force a minimum level regardless of score, for example a listed phishing URL or a known-bad attachment hash. An email with too little data to judge is reported as `INSUFFICIENT_DATA` instead of a false `CLEAN`.
 
 ## What it checks
@@ -77,28 +150,18 @@ Findings
 | **intel** | Links, sender domain and attachment hashes against local blocklists. |
 | **history** | Sender, link domains and hashes seen in phishing *you* labeled; first-time senders (weak, and silent until enough history exists). |
 
-## Quick start
+## Commands at a glance
 
-```bash
-git clone https://github.com/abdou-4/Arer.git
-cd arer
-uv sync                                  # developed on Python 3.13
+Every menu entry has a matching command (details and every option in [USAGE.md](USAGE.md)):
 
-uv run arer scan path/to/mail.eml        # full report for one email
-uv run arer scan path/to/folder -q       # one line per email
-uv run arer feeds update                 # optional: download blocklists (about 15 s, the only network use)
-uv run pytest                            # run the test suite
-```
-
-Main commands (details and every option in [USAGE.md](USAGE.md)):
-
-| Command | Purpose |
-|---|---|
-| `arer parse` | Convert `.eml`/`.msg` into JSON. |
-| `arer scan` | Parse, analyze and print a verdict. Accepts files or folders. |
-| `arer eval` | Measure detection and false alarms on labeled samples. |
-| `arer label` / `arer history` | Label emails and manage your private history. |
-| `arer feeds` | Download and inspect the blocklists. |
+| Menu entry | Command | Purpose |
+|---|---|---|
+| Scan emails | `arer scan` | Parse, analyze and print a verdict. Accepts files or folders. |
+| Measure accuracy | `arer eval` | Measure detection and false alarms on labeled samples. |
+| Label an email | `arer label` | Teach Arer from your own decision. |
+| My history | `arer history` | Review, import and delete your private history. |
+| Blocklists | `arer feeds` | Download and inspect the blocklists. |
+| Convert emails to JSON | `arer parse` | Convert `.eml`/`.msg` into JSON. |
 
 Exit codes make it scriptable: `scan` returns 2 when anything is `LIKELY_PHISHING` or `MALICIOUS`.
 
@@ -121,6 +184,7 @@ scripts/
   mbox_to_eml.py        sample your own mailbox into .eml test files
 src/arer/
   cli.py                parse | scan | eval | label | history | feeds
+  menu.py               interactive menu: questions in, normal commands out
   mail_parser.py        .eml/.msg to JSON (mail-parser based)
   loader.py             validated Email objects, size limits
   models.py             Email, Finding, Verdict
@@ -145,7 +209,7 @@ Treating every input as hostile was a design requirement from the start.
 - **Static analysis only.** Attachments are hashed and their first bytes inspected; zip files are only listed. Links are never visited. HTML is parsed, never rendered.
 - **Bounded work.** Limits on file size, parts, URLs and HTML tags; a per-analyzer timeout; a crashing analyzer is recorded in the verdict and the scan continues. (Python threads cannot be killed, so a truly stuck analyzer lingers until exit. Subprocess isolation is on the roadmap.)
 - **Safe output.** URLs, IPs, domains and addresses are defanged; control characters, ANSI escapes and bidirectional-override characters are made visible instead of interpreted.
-- **One network path.** Only `arer feeds update` touches the network: HTTPS only, hard size cap, redirects allowed only to the same host, an update that would shrink a feed below half its size is refused, and each feed is replaced in a single atomic transaction. Domain parsing uses a bundled public-suffix snapshot, so no list is downloaded at scan time.
+- **One network path.** Only `arer feeds update` touches the network: HTTPS only, hard size cap, redirects allowed only to the same host, an update that would shrink a feed below half its size is refused, and each feed is replaced in a single atomic transaction. Domain parsing uses a bundled public-suffix snapshot, so no list is downloaded at scan time. In the menu, this is the one step that asks for confirmation first.
 - **Private history.** It stores hashes, dates, sender domain, verdicts and findings. It never stores bodies, subjects, recipients or attachments, and sender addresses are hashed. Files are created with owner-only permissions.
 - **No self-reinforcement.** The tool never learns from its own verdicts, only from labels you set.
 - **No unsafe deserialization.** Configuration uses `yaml.safe_load`; there are no pickled models.
@@ -229,6 +293,7 @@ Things measuring taught me, each fixed and covered by a test:
 - Word lists cover a handful of languages and need curating.
 - OpenPhish support is implemented but untested against the live feed, and is off by default (non-commercial use only). `.msg` input is untested.
 - `parse --extract-attachments` writes real attachments to disk; use an isolated environment.
+- The interactive menu needs a real terminal. In scripts and automation, use the commands directly.
 
 ## Explainable AI layer
 
@@ -236,7 +301,7 @@ _To be added. This section will describe the XAI design, training data, evaluati
 
 ## Roadmap
 
-- Explainable AI layer (above)
+- Explainable AI layer (above), likely surfaced as a new menu entry
 - PDF link extraction, QR-code and image-text analysis, legacy Office macro inspection
 - HTML report, folder or mailbox watcher, local API
 - Subprocess or container isolation for analyzers, tamper-evident audit log

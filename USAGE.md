@@ -1,45 +1,180 @@
-# arer: usage
+# Arer: usage guide
 
 Local phishing triage. Nothing leaves your machine, and nothing inside an email is ever opened, run or fetched.
 
-## Setup
+## Contents
+
+**Getting started**
+1. [Quick start](#1-quick-start)
+2. [The interactive menu](#2-the-interactive-menu)
+3. [Setup](#3-setup)
+
+**Everyday use**
+4. [Commands at a glance](#4-commands-at-a-glance)
+5. [Scanning emails](#5-scanning-emails)
+6. [Reading a result](#6-reading-a-result)
+7. [Your private history and labels](#7-your-private-history-and-labels)
+8. [Blocklists](#8-blocklists)
+9. [Converting emails to JSON](#9-converting-emails-to-json)
+
+**Measuring and tuning**
+10. [Measuring accuracy: `arer eval`](#10-measuring-accuracy-arer-eval)
+11. [Building a trustworthy test set](#11-building-a-trustworthy-test-set)
+12. [Tuning with `rules.yaml`](#12-tuning-with-rulesyaml)
+13. [Word and domain lists](#13-word-and-domain-lists)
+
+**Reference and extending**
+14. [What the checks look at](#14-what-the-checks-look-at)
+15. [Extending Arer](#15-extending-arer) (new checks, new menu entries)
+16. [Safety notes](#16-safety-notes)
+17. [Troubleshooting](#17-troubleshooting)
+
+---
+
+# Getting started
+
+## 1. Quick start
+
+Pick whichever style you prefer. Both do exactly the same thing.
+
+**Guided (no commands to remember):**
 
 ```bash
-uv add pydantic pyyaml click tldextract rapidfuzz     # once (HTML and zip reading use the standard library)
-uv add --dev pytest
+arer
 ```
 
-`pyproject.toml` must expose the command (it already does if `uv run arer` worked before):
+A menu opens and asks you questions. See [The interactive menu](#2-the-interactive-menu).
+
+**Typed commands:**
+
+```bash
+arer scan mail.eml            # full report for one email
+arer scan my-folder -q        # one short line per email
+```
+
+> **Using `uv`?** Put `uv run` in front: `uv run arer` or `uv run arer scan mail.eml`.
+
+## 2. The interactive menu
+
+Type `arer` with no arguments in a terminal to open the menu. You choose a number, answer a few questions, and Arer runs the real command for you.
+
+```
+  What would you like to do?
+
+    1  Scan emails              Check one email, or a whole folder
+    2  Measure accuracy         Test arer on labeled samples
+    3  Label an email           Teach arer: phishing or legitimate?
+    4  My history               Saved scans, statistics, import
+    5  Blocklists               Download or check phishing blocklists
+    6  Convert emails to JSON   Turn .eml / .msg into JSON files
+    7  Help                     The commands behind this menu
+    0  Quit
+```
+
+### Handy things to know
+
+| Feature | How it works |
+|---|---|
+| **Go back** | Type `q` (or `back`) at any question. At the main menu, `0`, `q`, `quit` or `exit` leaves. |
+| **Cancel** | Press `Ctrl+C` to cancel the current action and return to the menu. |
+| **Paste paths freely** | Drag a file or folder into the terminal window, paste a quoted path, or use `~` for your home folder. Arer cleans it up. |
+| **See the command** | Before each action Arer prints `Running: arer ...`. Copy it and type it yourself next time. |
+| **Safe defaults** | Questions about saving data or using the internet default to **no**. |
+| **No colors** | The menu uses only plain, bold and dim text. Set `NO_COLOR=1` to remove bold and dim too. |
+| **Terminal only** | The menu needs a real interactive terminal. In scripts, use the commands. |
+
+### What each menu entry asks
+
+| Entry | Questions it asks | Command it runs |
+|---|---|---|
+| **1. Scan emails** | Path to a file or folder. For a folder: include sub-folders? (offered when emails also exist deeper), one line per email? Then: remember in history? save a JSON report per email (and where)? | `arer scan PATH [-r] [-q] [--save] [--out DIR]` |
+| **2. Measure accuracy** | Test a labeled folder, or your labeled saved scans? For a folder: path (it needs sub-folders named `phish` and `legit`; `data/samples` is suggested if it exists), list every sample? | `arer eval [FOLDER] [--details]` or `arer eval --from-history` |
+| **3. Label an email** | An email file, or the ID of a saved scan. Phishing, legitimate, or clear the label? Optional short note. | `arer label TARGET phish\|legit\|none [--note TEXT]` |
+| **4. My history** | Show recent scans (all, phishing, legitimate or unlabeled), show statistics, import a labeled folder, or delete one saved scan. | `arer history list\|stats\|import\|forget` |
+| **5. Blocklists** | Show status, or download the latest lists. Download asks for confirmation: it is the only step that uses the internet (about 70 MB). | `arer feeds status` or `arer feeds update` |
+| **6. Convert emails to JSON** | Path to a file or folder, output folder (default `output`), include sub-folders? | `arer parse PATH -o DIR [-r]` |
+| **7. Help** | Nothing. Prints the command cheat sheet. | none |
+
+### A sample session
+
+```
+  Choose a number: 1
+  Email file or folder to scan (q = back): ~/Downloads/suspicious
+  No emails directly in this folder, but 12 in total including sub-folders. Include sub-folders? [Y/n]: y
+  Found 12 email(s).
+  Show one short line per email, instead of full reports? [Y/n]: y
+  Remember the result in your private history? (stores no email text) [y/N]: n
+  Also save a report file (JSON) for each email? [y/N]: n
+
+  Running:  arer scan /home/you/Downloads/suspicious -r -q
+```
+
+After every action, press any key to return to the menu.
+
+## 3. Setup
+
+```bash
+git clone https://github.com/abdou-4/Arer.git
+cd Arer
+uv sync
+```
+
+That installs everything, including the test tools. Check that it works:
+
+```bash
+uv run arer --help
+uv run pytest
+```
+
+`pyproject.toml` must expose the command (it already does if `uv run arer` works):
 
 ```toml
 [project.scripts]
 arer = "arer.cli:main"
 ```
 
-## The commands
+<details>
+<summary>Starting a project from scratch instead of cloning?</summary>
 
 ```bash
-arer parse <file-or-folder>     # .eml/.msg  ->  JSON files        (your original tool)
-arer scan  <file-or-folder>...  # .eml/.msg/.json  ->  verdict     (parse + analyze in one step)
-arer eval  [data/samples]       # score ALL labeled samples, report detection and false alarms
-arer label FILE phish|legit     # teach arer: label an e-mail (saves it to your private history)
-arer history list|stats|import|forget   # look after that history
-arer feeds update               # download the phishing blocklists (the ONLY command that uses the internet)
-arer feeds status               # which blocklists are loaded, and how old they are
+uv add pydantic pyyaml click tldextract rapidfuzz     # HTML and zip reading use the standard library
+uv add --dev pytest
 ```
+
+</details>
+
+---
+
+# Everyday use
+
+## 4. Commands at a glance
+
+| Command | What it does |
+|---|---|
+| `arer` | Open the interactive menu. |
+| `arer scan <file-or-folder>...` | Check emails: `.eml`, `.msg` or `.json` in, verdict out. Parses and analyzes in one step. |
+| `arer eval [data/samples]` | Score all labeled samples and report detection and false alarms. |
+| `arer label FILE phish\|legit` | Teach Arer from your own decision (saved to your private history). |
+| `arer history list\|stats\|import\|forget` | Look after that history. |
+| `arer feeds update` | Download the phishing blocklists. **The only command that uses the internet.** |
+| `arer feeds status` | Show which blocklists are loaded and how old they are. |
+| `arer parse <file-or-folder>` | Convert `.eml`/`.msg` into JSON files. |
+| `arer --help` | Every option. |
 
 `scan` parses in memory, so for daily use you only need `scan`. Use `parse` when you want the JSON on disk.
 
-### Everyday examples
+## 5. Scanning emails
+
+### Examples
 
 ```bash
 arer scan data/samples/phish/phish_sample.eml        # full report for one email
-arer scan data/samples/phish                         # every .eml/.msg in a folder (your phish samples)
+arer scan data/samples/phish                         # every .eml/.msg in a folder
 arer scan data/samples/phish -q                      # one line per email
-arer scan output/sample-1.eml.json             # scan already-parsed JSON
-arer scan data/samples/phish --out reports           # also save one report per email
-arer scan mail.eml --json report.json          # save the report for one email
 arer scan data/samples/phish -r                      # include sub-folders
+arer scan output/sample-1.eml.json                   # scan already-parsed JSON
+arer scan data/samples/phish --out reports           # also save one report per email
+arer scan mail.eml --json report.json                # save the report for one email
 ```
 
 ### `scan` options
@@ -52,24 +187,12 @@ arer scan data/samples/phish -r                      # include sub-folders
 | `--json FILE` | Save the report for a single email. |
 | `--raw` | Keep real URLs and IPs in saved JSON. By default they are defanged. |
 | `--skip NAME` | Turn off an analyzer, for example `--skip body`. Repeatable. |
-| `--save` / `--no-save` | Remember this scan in your private history (see below). Default comes from `config/history.yaml` (`auto_save`, normally off). |
+| `--save` / `--no-save` | Remember this scan in your private history (see [section 7](#7-your-private-history-and-labels)). Default comes from `config/history.yaml` (`auto_save`, normally off). |
 | `--trust TEXT` | Your own mail server's name, so the parser can find `sender_ip`. |
 | `--config DIR` | Use a different config folder. |
 | `-v` (before the command) | Debug logging: `arer -v scan x.eml`. |
 
-### `parse` options (unchanged from the old CLI)
-
-| Option | What it does |
-|---|---|
-| `-o`, `--output DIR` | Where JSON goes (default `output`). `mail.eml` becomes `mail.eml.json`. |
-| `-r`, `--recursive` | Search sub-folders. |
-| `--trust TEXT` | Trusted server string for `sender_ip`. |
-| `--include-payload` | Embed attachment content (base64) in the JSON. |
-| `--extract-attachments` | Write attachments to `<output>/attachments/`. This puts real malware on disk, so use a VM or sandbox. |
-| `--full` | Add mail-parser's own `mail` and `mail_partial` views. |
-| `--compact` | Single-line JSON. |
-
-## Reading a result
+## 6. Reading a result
 
 ```
 Verdict :  SUSPICIOUS  27/100
@@ -79,6 +202,10 @@ Findings
         Reply-To domain evil[.]example differs from ...
 ```
 
+A finding's points are its **weight × its confidence**. Some checks are deliberately softer for newsletters (mail with a `List-Unsubscribe` header), because legitimate bulk senders often use other domains.
+
+### Verdict levels
+
 | Level | Meaning |
 |---|---|
 | `CLEAN` | Nothing significant found. Not proof of safety. |
@@ -87,8 +214,10 @@ Findings
 | `MALICIOUS` | Strong evidence, or a decisive finding such as a blocklisted URL. |
 | `INSUFFICIENT_DATA` | Too little to judge (stripped headers or an empty message). |
 
-`Level forced by: ...` means an override in `rules.yaml` raised the level regardless of score.
-`Analyzer problems` means a check crashed or timed out, so the result may be incomplete.
+Two extra lines can appear:
+
+- `Level forced by: ...` means an override in `rules.yaml` raised the level regardless of score.
+- `Analyzer problems` means a check crashed or timed out, so the result may be incomplete.
 
 ### Exit codes (for scripts)
 
@@ -101,76 +230,62 @@ Findings
 arer scan data/samples/phish -q || echo "phishing found or error"
 ```
 
-## Your private history: `arer label` and `arer history`
+In the menu, exit code 1 shows a short note: *"Some items could not be processed. See the messages above."*
 
-`arer` can remember what you scan and what you decided about it, in `data/history.db` (add it to `.gitignore`, and **back it up**: unlike the blocklist index it holds the labels you made). It stores a scan's SHA-256, date, sender domain, verdict, the findings and a *hashed* sender address, link domains and attachment hashes. **It never stores bodies, subjects, recipients or attachments.**
+## 7. Your private history and labels
+
+Arer can remember what you scan and what you decided about it, in `data/history.db`. Add it to `.gitignore` and **back it up**: unlike the blocklist index, it holds the labels you made.
+
+**What is stored:** a scan's SHA-256, date, sender domain, verdict, the findings, and a *hashed* sender address, link domains and attachment hashes.
+**What is never stored:** bodies, subjects, recipients or attachments.
+
+### Commands
 
 ```bash
 arer scan mail.eml --save            # remember this scan
 arer label mail.eml phish            # scan (if needed), save, and label it. Also: legit, or none to clear
 arer label 02444d20e8d2 legit        # label a saved scan by 6 or more characters of its SHA-256
 arer history list [--label phish]    # recent saved scans
-arer history stats                   # counts, how many rows are stale, whether first-time-sender is active
+arer history stats                   # counts, stale rows, whether first-time-sender is active
 arer history import data/samples     # save and label every sample in phish/ and legit/ (folder names = labels)
 arer history forget 02444d20e8d2     # delete one scan completely
 ```
 
-**What it teaches (only YOUR labels count, never the tool's own verdicts, so a wrong guess cannot reinforce itself):**
+In the menu this is entries **3 (Label an email)** and **4 (My history)**. To find an ID, use *My history → Show recent saved scans*.
+
+### What it teaches
+
+Only **your** labels count, never the tool's own verdicts, so a wrong guess cannot reinforce itself.
 
 | Finding | Meaning | Effect |
 |---|---|---|
-| `history.known_bad_sender` | This exact address (full strength), or its domain (80%), sent phishing you labelled. | +30 |
-| `history.known_bad_link_domain` | A link goes to a domain seen in phishing you labelled. | +20 |
-| `history.known_bad_hash` | An attachment matches one you labelled phishing. | Forces MALICIOUS |
-| `history.new_sender` | First e-mail ever from this address. Weak, and silent until `min_scans` (50) scans are saved. | +3 |
+| `history.known_bad_sender` | This exact address (full strength), or its domain (80%), sent phishing you labeled. | +30 |
+| `history.known_bad_link_domain` | A link goes to a domain seen in phishing you labeled. | +20 |
+| `history.known_bad_hash` | An attachment matches one you labeled phishing. | Forces MALICIOUS |
+| `history.new_sender` | First email ever from this address. Weak, and silent until `min_scans` (50) scans are saved. | +3 |
 
-Example: a scam with nothing detectable in its text (just a Drive link from a Gmail address) scores CLEAN the first time. After you run `arer label scam.eml phish`, the scammer's **next** e-mail from that address is flagged SUSPICIOUS. It cannot catch the first one, and it does not pretend to.
+**Example.** A scam with nothing detectable in its text (just a Drive link from a Gmail address) scores CLEAN the first time. After you run `arer label scam.eml phish`, the scammer's **next** email from that address is flagged SUSPICIOUS. It cannot catch the first one, and it does not pretend to.
 
-**Protections:** labelling one scam from `gmail.com` flags that exact address, never all of Gmail. Domains on your protected lists (`legit_domains`, free mail, mail platforms, shorteners) are never condemned at domain level, and shared hosts (`github.io`) are matched on the exact subdomain only. Re-scanning an e-mail never matches itself. `new_sender` is the least tested signal: it has no real-data measurement yet, so watch whether it adds false alarms.
+### Protections
 
-**Instant tuning:** a saved scan keeps its findings, not the points. Change a weight in `rules.yaml` and re-score every labeled scan at once, with no e-mail files:
+- Labeling one scam from `gmail.com` flags that exact address, never all of Gmail.
+- Domains on your protected lists (`legit_domains`, free mail, mail platforms, shorteners) are never condemned at domain level.
+- Shared hosts (`github.io`) are matched on the exact subdomain only.
+- Re-scanning an email never matches itself.
+- `new_sender` is the least tested signal: it has no real-data measurement yet, so watch whether it adds false alarms.
+
+### Instant tuning from history
+
+A saved scan keeps its findings, not the points. Change a weight in `rules.yaml` and re-score every labeled scan at once, with no email files:
 
 ```bash
 arer eval --from-history              # uses only your labeled saved scans
 ```
 
-If analyzer code or word lists changed since a scan was saved, the report warns that those rows are stale: their stored findings do not include the new rules, so re-scan the originals (`arer history import`) for exact numbers. `eval` ignores `history.*` signals by default, because your history may already contain a sample's campaign siblings and would inflate detection. Add `--with-history-signals` to include them.
+- If analyzer code or word lists changed since a scan was saved, the report warns that those rows are **stale**. Re-scan the originals (`arer history import`) for exact numbers.
+- `eval` ignores `history.*` signals by default, because your history may already contain a sample's campaign siblings and would inflate detection. Add `--with-history-signals` to include them.
 
-## Measuring: `arer eval`
-
-Tuning weights by feel does not work. `arer eval` scores every sample and tells you what the numbers are.
-
-```bash
-arer eval                      # everything under data/samples
-arer eval --details            # also list every sample with its score
-arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept only as a stress test)
-arer eval --only dev           # tune on 80% of samples ...
-arer eval --only test          # ... and check on the other 20% now and then
-arer eval --skip body          # what happens if an analyzer is turned off?
-arer eval --from-history       # re-score your labeled saved scans instantly (no e-mail files)
-arer eval --config /tmp/cfg    # try a copy of config/ with different weights
-```
-
-Labels come from folders: files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`:
-
-```
-filename,label
-sample-9.eml,legit
-```
-
-What it shows:
-
-| Section | Use it to |
-|---|---|
-| Detection by level | How many phishing emails reach SUSPICIOUS / LIKELY_PHISHING / MALICIOUS and how many legit emails are wrongly flagged at each level. Each rate has a 95% range in brackets. With 10 legit emails, 0 false alarms still allows about 28%, so do not read 0/10 as "solved". 60 emails brings the ceiling to about 6%, 100 to about 4%. |
-| By source | The same numbers per folder (`legit/modern`, `legit/archive`, `phish`), so you can judge false alarms on modern mail without separate runs. |
-| Phishing MISSED / Legit FLAGGED | Open the exact emails that need work. |
-| Score sweep | Pick thresholds: choose the T that catches the most phishing before legit mail starts getting flagged. |
-| Findings table | See which findings help (fire on phishing) and which are noisy (marked `<- noisy`, fire on legit mail). Lower the weight of noisy ones in `rules.yaml`. |
-
-The workflow: run `arer eval`, change one thing in `rules.yaml` or a list, run it again, and keep the change only if detection went up without more false alarms. Below about 30 samples per class the numbers are only a rough guide. Public sets (Phishing Pot, SpamAssassin) are in the earlier notes.
-
-## Blocklists: `arer feeds`
+## 8. Blocklists
 
 Scans can check links, the sender domain and attachment hashes against public phishing blocklists, entirely offline. `arer feeds update` is the only command that touches the network.
 
@@ -180,9 +295,11 @@ arer feeds status              # entries and age of every feed
 arer feeds update openphish    # download one feed by name, even if it is disabled
 ```
 
+In the menu this is entry **5 (Blocklists)**, and the download step asks you to confirm first.
+
 Add `data/feeds/` to `.gitignore`. The index is about 27 MB and is a disposable cache: delete it any time and run `update` again. It stores only hashes of entries, never the lists, so it cannot be read back as a list of URLs.
 
-**Feeds** (`config/feeds.yaml`):
+### Feeds (`config/feeds.yaml`)
 
 | Feed | Default | Notes |
 |---|---|---|
@@ -193,7 +310,9 @@ Add `data/feeds/` to `.gitignore`. The index is about 27 MB and is a disposable 
 
 A feed you downloaded but disabled in `feeds.yaml` is ignored by scans.
 
-**What the findings mean**
+**Old samples:** the live lists hold only active phishing, so old Phishing Pot samples will rarely hit. To measure the blocklist on them, set `enabled: true` on the two `_inactive` feeds and run `arer feeds update`.
+
+### What the findings mean
 
 | Finding | Meaning | Effect |
 |---|---|---|
@@ -203,20 +322,93 @@ A feed you downloaded but disabled in `feeds.yaml` is ignored by scans.
 | `attachment.known_malicious_hash` | Hash is in your local list. | Forces MALICIOUS. |
 | `intel.feeds_missing` / `intel.feeds_stale` | No data yet, or older than `max_age_days` (default 7). Adds no points, but never leaves you with silent false comfort. | Notice only. |
 
-**False-alarm protections** (each one found by testing against the live feed):
+### False-alarm protections
+
+Each one was found by testing against the live feed.
+
 - The feed lists `https://www.amazon.com/` and `bit.ly` today. A listed root page of a protected site is ignored, and protected domains (your `legit_domains`, `mail_platforms`, `free_mail`, and shorteners) never match at domain level, so one bad entry cannot condemn every mail that links to them. A specific listed page on such a site, like one Drive file, still hits.
 - About one fifth of the domain feed is subdomains of shared hosts (`github.io`, `pages.dev`). For those, only the exact listed subdomain matches, never the host itself.
 - An update that would shrink a feed below half its previous size is refused, and an error page or garbage download is rejected, so an outage cannot wipe good data.
 - Downloads are HTTPS only, size-capped, and may redirect only to the same host.
 
-**Old samples:** the live lists hold only active phishing, so old Phishing Pot samples will rarely hit. To measure the blocklist on them, set `enabled: true` on the two `_inactive` feeds and run `arer feeds update`.
+## 9. Converting emails to JSON
 
-## Building a trustworthy test set
+You rarely need this, because `scan` parses in memory. Use `parse` when you want the JSON on disk.
+
+```bash
+arer parse mail.eml                    # writes output/mail.eml.json
+arer parse my-folder -o json-out -r    # a whole folder, including sub-folders
+```
+
+| Option | What it does |
+|---|---|
+| `-o`, `--output DIR` | Where JSON goes (default `output`). `mail.eml` becomes `mail.eml.json`. |
+| `-r`, `--recursive` | Search sub-folders. |
+| `--trust TEXT` | Trusted server string for `sender_ip`. |
+| `--include-payload` | Embed attachment content (base64) in the JSON. |
+| `--extract-attachments` | Write attachments to `<output>/attachments/`. **This puts real malware on disk, so use a VM or sandbox.** |
+| `--full` | Add mail-parser's own `mail` and `mail_partial` views. |
+| `--compact` | Single-line JSON. |
+
+In the menu this is entry **6 (Convert emails to JSON)**.
+
+---
+
+# Measuring and tuning
+
+## 10. Measuring accuracy: `arer eval`
+
+Tuning weights by feel does not work. `arer eval` scores every sample and tells you what the numbers are.
+
+```bash
+arer eval                      # everything under data/samples
+arer eval --details            # also list every sample with its score
+arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept only as a stress test)
+arer eval --only dev           # tune on 80% of samples ...
+arer eval --only test          # ... and check on the other 20% now and then
+arer eval --skip body          # what happens if an analyzer is turned off?
+arer eval --from-history       # re-score your labeled saved scans instantly (no email files)
+arer eval --config /tmp/cfg    # try a copy of config/ with different weights
+```
+
+In the menu this is entry **2 (Measure accuracy)**.
+
+**Labels come from folders:** files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`:
+
+```
+filename,label
+sample-9.eml,legit
+```
+
+### What the report shows
+
+| Section | Use it to |
+|---|---|
+| **Detection by level** | See how many phishing emails reach SUSPICIOUS / LIKELY_PHISHING / MALICIOUS, and how many legit emails are wrongly flagged at each level. Each rate has a 95% range in brackets. With 10 legit emails, 0 false alarms still allows about 28%, so do not read 0/10 as "solved". 60 emails brings the ceiling to about 6%, 100 to about 4%. |
+| **By source** | See the same numbers per folder (`legit/modern`, `legit/archive`, `phish`), so you can judge false alarms on modern mail without separate runs. |
+| **Phishing MISSED / Legit FLAGGED** | Open the exact emails that need work. |
+| **Score sweep** | Pick thresholds: choose the T that catches the most phishing before legit mail starts getting flagged. |
+| **Findings table** | See which findings help (fire on phishing) and which are noisy (marked `<- noisy`, fire on legit mail). Lower the weight of noisy ones in `rules.yaml`. |
+
+### The honest tuning workflow
+
+```bash
+uv run arer eval > docs/eval-baseline.txt     # 1. record where you are
+# 2. change ONE thing (a weight, a list entry, a rule)
+uv run arer eval > docs/eval-after.txt        # 3. run it again
+diff docs/eval-baseline.txt docs/eval-after.txt
+```
+
+Keep a change only if detection rose **without** more false alarms. Tune against `--only dev`, and look at `--only test` only now and then. Below about 30 samples per class the numbers are only a rough guide.
+
+`scan` and `eval` also read mail files without an `.eml` extension, such as `00001.7c53...`, if the first line looks like a mail header.
+
+## 11. Building a trustworthy test set
 
 `arer eval` is only as honest as its samples. Four traps to avoid:
 
 1. **Spam is not legitimate mail, and spam is not phishing.** From the SpamAssassin corpus use only `easy_ham`, `easy_ham_2` and `hard_ham` as `legit/`. Put the `spam` folders in `data/samples/spam/`. Eval ignores that folder.
-2. **Era bias.** SpamAssassin mail is from 2002-2003 and has no SPF/DKIM/DMARC results, while modern phishing has them. Findings like `auth.results_missing` then separate your classes by *year*, not by phishing. The fix is modern legitimate mail (next section). Until you have it, compare with `arer eval --skip auth --skip headers` to see the content checks without era effects.
+2. **Era bias.** SpamAssassin mail is from 2002-2003 and has no SPF/DKIM/DMARC results, while modern phishing has them. Findings like `auth.results_missing` then separate your classes by *year*, not by phishing. The fix is modern legitimate mail (below). Until you have it, compare with `arer eval --skip auth --skip headers` to see the content checks without era effects.
 3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many samples, and the dev/test split can leak. Judge by campaigns, not by counts.
 4. **Too little modern legit mail.** Aim for 40 or more of your own recent emails, including newsletters, receipts, notifications and mailing lists.
 
@@ -241,20 +433,9 @@ python scripts/mbox_to_eml.py "Inbox.mbox" -o data/samples/legit/modern --count 
 
 It picks random Inbox messages, skips Spam, Trash, Drafts and Sent (sent mail has no receiving-server stamp), writes `mine_0001.eml` and so on, and never exports the same message twice, so you can run it again to add more. Your real mail is private: add `data/samples/legit/mine_*` to `.gitignore`.
 
-### The workflow that keeps tuning honest
+## 12. Tuning with `rules.yaml`
 
-```bash
-uv run arer eval > docs/eval-baseline.txt     # 1. record where you are
-# 2. change ONE thing (a weight, a list entry, a rule)
-uv run arer eval > docs/eval-after.txt        # 3. run it again
-diff docs/eval-baseline.txt docs/eval-after.txt
-```
-
-Keep a change only if detection rose without more false alarms. Tune against `--only dev`, and look at `--only test` only now and then. `scan` and `eval` also read mail files without an `.eml` extension, such as `00001.7c53...`, if the first line looks like a mail header.
-
-## Tuning: `config/rules.yaml`
-
-Everything adjustable is here. No code changes are needed.
+Everything adjustable is in `config/rules.yaml`. No code changes are needed.
 
 | Section | Purpose |
 |---|---|
@@ -267,44 +448,9 @@ Everything adjustable is here. No code changes are needed.
 
 A typo in this file stops the program with a clear error instead of silently scoring wrong.
 
-## Lists: `config/lists/*.txt`
-
-One entry per line, lowercase, `#` for comments. Put the source and date at the top of each file.
-
-| File | Used for | Maintain by |
-|---|---|---|
-| `brands.txt` | Display-name spoofing and lookalike domains | One lowercase word per brand. Add brands impersonated in your region and organization. Avoid generic words ("outlook") because they cause false alarms. |
-| `shared_domains.txt` | Domains where anyone can register a free name (`onmicrosoft.com`, `pages.dev`, `github.io`...) | Add more as you see them abused. |
-| `mail_platforms.txt` | Big mail platforms (Google, Microsoft, Amazon SES, Mailchimp...) whose Message-ID and Return-Path are normal | Add senders' ESPs when you see false mismatches. |
-| `callback_words.txt` | Phrases for the callback-scam check. It needs a phone number AND an amount AND one of these | Add phrases in your languages. |
-| `lure_words.txt` | Prize, lottery, inheritance and crypto-giveaway phrases, matched in the subject, text and attachment file names. Two different phrases give full confidence, one gives half | Add phrases in your languages. Keep generic words (winner, donation) out. |
-| `urgency_words.txt`, `credential_words.txt`, `generic_greetings.txt` | Phrase lists for the body check (accents and punctuation ignored) | Add phrases in your languages. Inflected forms need their own line (`expira hoje`, `expiram hoje`). |
-| `legit_domains.txt` | Exempts known-good domains from brand and lookalike checks | Add your own company domain, bank and providers. **When a legit email gets flagged, fix it here first.** |
-| `suspicious_tlds.txt` | Links on heavily abused TLDs | Refresh from Spamhaus or Interisle reports. |
-| `executable_ext.txt` | Dangerous attachment types | Start from Microsoft's blocked-attachments list. |
-| `macro_ext.txt`, `archive_ext.txt` | Macro-capable Office files and archives | Rarely changes. |
-| `shorteners.txt` | Hidden link destinations | Community lists on GitHub. |
-| `free_mail.txt` | A "bank" writing from gmail.com | Community freemail lists. |
-| `bad_mailers.txt` | Mass-mailer tools in `X-Mailer` | Build from your own phishing samples. Weakest list. |
-
-## What the checks look at
-
-| Analyzer | Finds |
-|---|---|
-| `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. Also DKIM that passes but is signed by an unrelated domain (random throw-away domains, free `onmicrosoft.com` tenants). Known mail platforms and the sender's own domain are fine. |
-| `sender` | Malformed From, Reply-To pointing elsewhere (on Gmail and other free mail, a different mailbox counts, because the domain tells you nothing), display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
-| `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
-
-| `urls` | Static link checks only (nothing is ever fetched): link text vs real destination (softened when the click goes to the sender's own domain, e.g. Discord's `dis.gd` -> `click.discord.com`, unless the text names a well-known site), bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
-| `attachments` | A message that says "see attached" but has no attachment, executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
-| `intel` | Links, sender domain and attachment hashes against the local blocklists (see Blocklists). |
-| `body` | Prize and lottery lures (also in attachment names), dot-spaced subjects (`Now.get.up.to.1.BTC`), callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, a large hidden block of text (spam-filter poisoning, strong) or a short hidden preheader (`body.hidden_preheader`, weak and low-weight), HTML padded with junk (made-up tag names, repeated DOCTYPEs, padding tags; many hidden spacer elements are normal in newsletters and are not counted), image-only messages. |
-
-Some checks are deliberately softer for newsletters (mail with a List-Unsubscribe header), because legitimate bulk senders often use other domains. In the report, a finding's points are its weight multiplied by its confidence.
-
 ### Which Authentication-Results to trust
 
-Anyone can forge an `Authentication-Results` line inside an email. Only the stamp added by your own receiving server is believable. By default `arer` trusts only the topmost one, which your server added last. To be stricter, name your server in `config/rules.yaml`:
+Anyone can forge an `Authentication-Results` line inside an email. Only the stamp added by your own receiving server is believable. By default Arer trusts only the topmost one, which your server added last. To be stricter, name your server in `config/rules.yaml`:
 
 ```yaml
 auth:
@@ -313,7 +459,48 @@ auth:
 
 If a server is named but no matching stamp exists, the result is `auth.results_missing` instead of a forged "pass". `temperror` and `permerror` mean "could not check" and are not counted as failures.
 
-## Adding a check
+## 13. Word and domain lists
+
+The lists live in `config/lists/*.txt`. One entry per line, lowercase, `#` for comments. Put the source and date at the top of each file.
+
+> **Rule of thumb:** when a legitimate email gets flagged, fix it in `legit_domains.txt` first.
+
+| File | Used for | Maintain by |
+|---|---|---|
+| `brands.txt` | Display-name spoofing and lookalike domains | One lowercase word per brand. Add brands impersonated in your region and organization. Avoid generic words ("outlook") because they cause false alarms. |
+| `legit_domains.txt` | Exempts known-good domains from brand and lookalike checks | Add your own company domain, bank and providers. |
+| `shared_domains.txt` | Domains where anyone can register a free name (`onmicrosoft.com`, `pages.dev`, `github.io`...) | Add more as you see them abused. |
+| `mail_platforms.txt` | Big mail platforms (Google, Microsoft, Amazon SES, Mailchimp...) whose Message-ID and Return-Path are normal | Add senders' ESPs when you see false mismatches. |
+| `callback_words.txt` | Phrases for the callback-scam check. It needs a phone number AND an amount AND one of these | Add phrases in your languages. |
+| `lure_words.txt` | Prize, lottery, inheritance and crypto-giveaway phrases, matched in the subject, text and attachment file names. Two different phrases give full confidence, one gives half | Add phrases in your languages. Keep generic words (winner, donation) out. |
+| `urgency_words.txt`, `credential_words.txt`, `generic_greetings.txt` | Phrase lists for the body check (accents and punctuation ignored) | Add phrases in your languages. Inflected forms need their own line (`expira hoje`, `expiram hoje`). |
+| `suspicious_tlds.txt` | Links on heavily abused TLDs | Refresh from Spamhaus or Interisle reports. |
+| `executable_ext.txt` | Dangerous attachment types | Start from Microsoft's blocked-attachments list. |
+| `macro_ext.txt`, `archive_ext.txt` | Macro-capable Office files and archives | Rarely changes. |
+| `shorteners.txt` | Hidden link destinations | Community lists on GitHub. |
+| `free_mail.txt` | A "bank" writing from gmail.com | Community freemail lists. |
+| `bad_mailers.txt` | Mass-mailer tools in `X-Mailer` | Build from your own phishing samples. Weakest list. |
+
+---
+
+# Reference and extending
+
+## 14. What the checks look at
+
+| Analyzer | Finds |
+|---|---|
+| `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. Also DKIM that passes but is signed by an unrelated domain (random throw-away domains, free `onmicrosoft.com` tenants). Known mail platforms and the sender's own domain are fine. |
+| `sender` | Malformed From, Reply-To pointing elsewhere (on Gmail and other free mail, a different mailbox counts, because the domain tells you nothing), display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
+| `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
+| `urls` | Static link checks only (nothing is ever fetched): link text vs real destination (softened when the click goes to the sender's own domain, e.g. Discord's `dis.gd` -> `click.discord.com`, unless the text names a well-known site), bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
+| `attachments` | A message that says "see attached" but has no attachment, executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
+| `intel` | Links, sender domain and attachment hashes against the local blocklists (see [Blocklists](#8-blocklists)). |
+| `body` | Prize and lottery lures (also in attachment names), dot-spaced subjects (`Now.get.up.to.1.BTC`), callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, a large hidden block of text (spam-filter poisoning, strong) or a short hidden preheader (`body.hidden_preheader`, weak and low-weight), HTML padded with junk (made-up tag names, repeated DOCTYPEs, padding tags; many hidden spacer elements are normal in newsletters and are not counted), image-only messages. |
+| `history` | Sender, link domains and hashes seen in phishing you labeled; first-time senders (see [section 7](#7-your-private-history-and-labels)). |
+
+## 15. Extending Arer
+
+### Adding a check
 
 Create `src/arer/analyzers/<name>.py`. It is picked up automatically.
 
@@ -334,28 +521,51 @@ class Example(Analyzer):
 
 Then make sure the finding id has a weight in `rules.yaml`. Keep one check per signal, because two analyzers reporting the same thing would double-count it.
 
-## Safety notes
+### Adding a menu entry
+
+The menu lives in `src/arer/menu.py`. The rule that keeps it simple: **a menu entry only asks questions and builds a normal command.** It never contains scanning or scoring logic of its own. It hands the arguments to `run_cli()`, which runs the real command and prints it.
+
+To add an entry (an AI feature later, for example), write one function and decorate it:
+
+```python
+@register_action("Explain a verdict", "Plain-language reasons for a result")
+def explain_flow() -> None:
+    path = ask_path("Email file to explain", want="file")   # re-asks until the path exists; q = back
+    if path is None:
+        return                                               # the user typed q
+    run_cli(["scan", str(path)])                             # same as typing: arer scan FILE
+```
+
+Numbers are assigned automatically in the order functions are registered, and **Help** is last because it is defined last. Helpers you can reuse:
+
+| Helper | Use it to |
+|---|---|
+| `ask_path(question, want="any"\|"file"\|"folder", default=None)` | Ask for a path until it exists. Returns `None` if the user types `q`. |
+| `ask_choice(question, [(key, label), ...])` | Show a numbered list. Returns the chosen key, or `None` if cancelled. |
+| `click.confirm(...)`, `click.prompt(...)` | Yes/no and free-text questions. Default risky options to **no**. |
+| `run_cli(args)` | Run an `arer` command and show how to type it yourself. |
+| `bold()`, `dim()` | Styling that respects `NO_COLOR`. |
+
+## 16. Safety notes
 
 - Output is defanged (`hxxps://evil[.]com`) and stripped of terminal escape codes and right-to-left override characters.
 - Attachments are hashed and read for their first 16 bytes only. They are never opened or executed.
-- No network access during `scan`.
+- No network access during `scan`. Only `arer feeds update` uses the network.
 - Do not paste real IOCs from raw reports into chat tools or clickable ticket fields.
+- Tests: `uv run pytest`.
 
-## Tests
+## 17. Troubleshooting
 
-```bash
-uv run pytest
-```
-
-## Troubleshooting
-
-| Message | Fix |
+| Message or symptom | Fix |
 |---|---|
+| Typing `arer` shows help instead of the menu | The menu only opens in an interactive terminal. Run it directly in a terminal window (not through a pipe or script), or use the typed commands. |
+| `I cannot find: <path>` (in the menu) | Check the path. Tip: drag the file or folder into the terminal window to paste it. |
 | `rules.yaml not found` | Run from the project root, or set `PHISHSCOPE_CONFIG=/path/to/config`. |
 | `parser failed (...)` | The file is malformed or not an email. Try `arer parse` on it and check the error. |
-| Hundreds of `WARNING mailparser.core: ... 'calendar'` lines | Harmless calendar invites. They are now hidden unless you use `-v`. |
+| Hundreds of `WARNING mailparser.core: ... 'calendar'` lines | Harmless calendar invites. They are hidden unless you use `-v`. |
 | `.msg` files fail | Install the extra: `uv add "mail-parser[outlook]"`. |
 | `does not look like parser output` | You pointed `scan` at a JSON that is not from `arer parse` (a report, for example). |
 | Legit email flagged as brand spoof or lookalike | Add its domain to `legit_domains.txt`. |
 | `finding id ... has no weight` (warning) | A finding id is missing or misspelled in `rules.yaml`. |
 | `INSUFFICIENT_DATA` on a real email | The sender or the whole body is missing from the parsed output. |
+| Menu says "That folder has no sub-folders named phish or legit" | `eval` needs labeled sub-folders. See [section 10](#10-measuring-accuracy-arer-eval). |
