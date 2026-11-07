@@ -1,12 +1,54 @@
-output/
-data/samples/*
-!data/samples/phish_sample.eml
+# Python bytecode and caches
 __pycache__/
-.venv/
+*.py[cod]
+*$py.class
 .pytest_cache/
-reports/
-data/feeds/
-*.db
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
 
-data/feeds/
-data/history.db
+# Virtual environments and local package/build artifacts
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Arer-generated reports and local data
+/output/
+/reports/
+/data/feeds/
+/data/history.db
+/data/history.db-*
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Raw email samples and datasets (may contain private or restricted data)
+/data/samples/*
+!/data/samples/README.md
+
+# Editor and operating-system files
+.idea/
+.DS_Store
+Thumbs.db
+
