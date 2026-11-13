@@ -45,6 +45,14 @@ LIST_FILES = {
 # list the id, so an upgrade never overwrites your tuning and never silently scores a new finding as zero.
 DEFAULT_WEIGHTS: dict[str, int] = {
     "body.hidden_preheader": 1,
+    # Provisional Unicode weights; tune against local benign/phishing samples.
+    "body.invisible_chars": 5,
+    "body.bidi_control": 7,
+    "body.homoglyph_text": 8,
+    "sender.obfuscated_name": 8,
+    "sender.mixed_script_domain": 8,
+    "url.mixed_script_domain": 8,
+    "url.invisible_chars": 5,
 }
 _warned: set[str] = set()
 

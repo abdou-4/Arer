@@ -48,6 +48,8 @@ weights:
   sender.lookalike_domain: 15
   sender.punycode_domain: 8
   sender.shared_domain: 8
+  sender.obfuscated_name: 8       # provisional; Unicode lookalike in the display name
+  sender.mixed_script_domain: 8  # provisional; mixed scripts inside one IDN label
   sender.on_blocklist: 25
 
   # ---- headers ----
@@ -70,6 +72,8 @@ weights:
   url.userinfo_at: 8
   url.many_subdomains: 8
   url.punycode: 8
+  url.mixed_script_domain: 8     # provisional; raw Unicode U-label with mixed scripts
+  url.invisible_chars: 5         # provisional; invisible formatting inside URL words
   url.login_keywords: 2
   url.not_https: 3
   url.lookalike_domain: 15
@@ -98,6 +102,9 @@ weights:
   body.prize_lure: 12
   body.obfuscated_subject: 6
   body.html_obfuscation: 8
+  body.invisible_chars: 5        # provisional; invisible controls inserted inside words
+  body.bidi_control: 7           # provisional; directional overrides/embeddings/isolates
+  body.homoglyph_text: 8         # provisional; visually confusable known brand in body text
 
   # ---- history: signals from your OWN saved scans (only your labels teach it, never the tool's own verdicts) ----
   history.new_sender: 3

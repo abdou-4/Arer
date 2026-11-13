@@ -7,15 +7,14 @@ French, Portuguese, Spanish and a little Arabic. Text is accent-folded before ma
 from __future__ import annotations
 
 import re
-import unicodedata
 from functools import lru_cache
 
 from ..models import Email
 from ..util.domains import registrable
 from ..util.html import parse_html
+from ..util.unicode_text import fold_for_terms, fold_plain_for_matching, obfuscated_term_tokens
 from .base import Analyzer, register
 
-ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 GREET_EMAIL = re.compile(r"(?<!\w)(?:dear|hello|hi|bonjour|cher|chere|ola|hola|estimado)\s+[\w.+\-]+@[\w.\-]+")
 # phone numbers need separators/parentheses, so a plain case id like 33897467193 does not count
 PHONE = re.compile(r"(?<![\w.])(?:(?:\+?\d{1,3}[\s.\-])?(?:\(\d{3}\)\s?|\d{3}[\s.\-])\d{3}[\s.\-]?\d{4}|\+\d{1,3}[\s.\-]?\d{1,4}[\s.\-]?\d{3,4}[\s.\-]?\d{3,4})(?![\w])")
@@ -26,15 +25,14 @@ FILLER = {"now", "get", "up", "to", "your", "you", "the", "free", "win", "won", 
 AMOUNT = re.compile(r"[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:usd|eur|gbp|dollars|euros)\b", re.I)
 
 
-_PUNCT = re.compile(r"[^\w\s]|_")
-_SPACES = re.compile(r"\s+")
-
-
 def fold(s: str) -> str:
-    """lowercase, accents removed, punctuation -> space ("aujourd'hui" == "aujourd hui")."""
-    s = unicodedata.normalize("NFKD", s.lower())
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return _SPACES.sub(" ", _PUNCT.sub(" ", s)).strip()
+    """Compatibility/diacritic fold; cross-script mapping is term-specific."""
+    return fold_plain_for_matching(s)
+
+
+def _obfuscated_evidence(text: str, phrases: list[str]) -> list[dict]:
+    terms = {word for phrase in phrases for word in fold(phrase).split() if len(word) >= 3}
+    return obfuscated_term_tokens(text, terms)
 
 
 @lru_cache(maxsize=16)
@@ -47,7 +45,7 @@ def _matcher(phrases: frozenset[str]):
 
 def matched(text: str, phrases: frozenset[str]) -> list[str]:
     m = _matcher(phrases)
-    return sorted(set(m.findall(fold(text)))) if m else []
+    return sorted(set(m.findall(fold_for_terms(text, phrases)))) if m else []
 
 
 @register
@@ -64,19 +62,25 @@ class Body(Analyzer):
 
         urg = matched(text, L.get("urgency_words", frozenset()))
         if urg:
+            evidence = _obfuscated_evidence(text, list(L.get("urgency_words", frozenset())))
             out.append(self.finding("body.urgency_words", f"Pressure language: {', '.join(urg[:5])}",
-                                    min(1.0, len(urg) / 3), phrases=urg[:10]))
+                                    min(1.0, len(urg) / 3), phrases=urg[:10],
+                                    unicode_matches=evidence))
         cred = matched(text, L.get("credential_words", frozenset()))
         if cred:
+            evidence = _obfuscated_evidence(text, list(L.get("credential_words", frozenset())))
             out.append(self.finding("body.credential_words", f"Asks for credentials or payment data: {', '.join(cred[:5])}",
-                                    min(1.0, len(cred) / 3), phrases=cred[:10]))
+                                    min(1.0, len(cred) / 3), phrases=cred[:10],
+                                    unicode_matches=evidence))
 
         # prize / lottery / inheritance / crypto-giveaway language, also in attachment file names
         lure_text = " ".join([email.envelope.subject, text, *(a.filename for a in email.attachments)])
         lures = matched(lure_text, L.get("lure_words", frozenset()))
         if lures:
+            evidence = _obfuscated_evidence(lure_text, list(L.get("lure_words", frozenset())))
             out.append(self.finding("body.prize_lure", f"Prize, lottery or giveaway scam language: {', '.join(lures[:5])}",
-                                    min(1.0, len(lures) / 2), phrases=lures[:10]))
+                                    min(1.0, len(lures) / 2), phrases=lures[:10],
+                                    unicode_matches=evidence))
         subj = email.envelope.subject.strip()
         if DOT_SUBJECT.match(subj) and sum(1 for w in subj.lower().split(".") if w in FILLER) >= 2:
             out.append(self.finding("body.obfuscated_subject", "Subject uses dots instead of spaces to slip past filters",
@@ -120,16 +124,18 @@ class Body(Analyzer):
                 if info.has_password_input:
                     out.append(self.finding("body.password_form", "Email contains a password input field"))
 
-            # hidden text and zero-width salting
-            hidden_n, zw = len(info.hidden_text), len(ZERO_WIDTH.findall(info.visible_text))
+            # Hidden HTML text remains a body finding. Invisible Unicode inside
+            # words is handled separately by the context-aware Unicode analyzer;
+            # blanket counting here incorrectly flags Persian ZWNJ and emoji ZWJ.
+            hidden_n = len(info.hidden_text)
             if hidden_n >= 5000:        # thousands of invisible characters = spam-filter poisoning, never a preheader
                 out.append(self.finding(
                     "body.hidden_text", f"Huge block of hidden text ({hidden_n} characters), used to evade spam filters",
                     1.0, hidden_chars=hidden_n, sample=info.hidden_text[:120]))
-            elif hidden_n >= 100 or zw >= 3:   # newsletters legitimately hide a short preheader: its own, low-weight finding
+            elif hidden_n >= 100:       # newsletters legitimately hide a short preheader
                 out.append(self.finding(
-                    "body.hidden_preheader", "Some text is hidden from the reader (a preheader, or zero-width characters)",
-                    0.2 if bulk else 0.8, hidden_chars=hidden_n, zero_width=zw, sample=info.hidden_text[:120]))
+                    "body.hidden_preheader", "Some text is hidden from the reader (a preheader)",
+                    0.2 if bulk else 0.8, hidden_chars=hidden_n, sample=info.hidden_text[:120]))
 
             # junk HTML: made-up tags, repeated DOCTYPEs, padding tags, mass hidden elements (spam-filter evasion)
             signs = []
