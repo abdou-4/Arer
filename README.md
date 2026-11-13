@@ -4,7 +4,7 @@
 
 Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`, and JSON email data using independent security analyzers, local threat-intelligence blocklists, and configurable scoring rules. Each verdict includes traceable findings and supporting evidence, so a scan can be reviewed instead of treated as a black-box decision.
 
-**Current phase:** Rule-based detection, evidence-backed scoring, local threat intelligence, private labeled history, a repeatable evaluation harness, and an interactive menu for non-technical users.
+**Current phase:** Rule-based detection with Unicode-aware phishing checks, evidence-backed scoring, local threat intelligence, private labeled history, a repeatable evaluation harness, and an interactive menu for non-technical users.
 
 **Future work:** Machine learning and Explainable AI (XAI). The XAI layer is planned and is not implemented in the current phase.
 
@@ -17,13 +17,13 @@ Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`,
 ## Highlights
 
 - **Easy to use.** Type `arer` and answer plain questions in an interactive menu. No commands to memorize, and the menu shows you the exact command it ran so you can learn the CLI as you go.
-- **Eight independent analyzers** (authentication, sender, headers, links, attachments, message text, blocklists, personal history). Each returns *findings*; none of them sets its own score.
+- **Nine independent analyzers** (authentication, sender, headers, links, attachments, message text, Unicode, blocklists, personal history). Each returns *findings*; none of them sets its own score.
 - **Explainable by construction.** Every point in a verdict traces back to a named finding with its evidence. Weights, caps, thresholds and word lists live in config files, not code.
 - **Offline blocklists.** About 1.2 million phishing domains and URLs from public feeds, held in a 27 MB hash index. Lookups take microseconds and add no measurable scan time.
 - **A private, labeled history.** Label an email once and later mail from the same sender, links or attachments is judged by what you decided. Only *your* labels teach it.
 - **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, an 80/20 dev/test split, and which findings help or hurt.
 - **Hostile-input design.** Size limits, per-analyzer timeouts, defanged output, terminal-escape filtering, and no network except one explicit command.
-- **About 190 automated tests**, including tests built from real bugs found while measuring.
+- **291 automated tests**, including regression tests for Unicode confusables, invisible characters, bidi controls and IDN handling.
 
 ## Quick start
 
@@ -124,7 +124,7 @@ Findings
    pipeline ───────── runs every analyzer in parallel; one crash or timeout never stops the scan
         │
    analyzers ──────► findings (id, confidence, evidence)
-        │              auth · sender · headers · urls · attachments · body
+        │              auth · sender · headers · urls · attachments · body · unicode
         │              intel (blocklists) · history (your labels)
         │
    scoring ────────── points = weight × confidence, each finding id counted once,
@@ -142,11 +142,12 @@ The menu (`menu.py`) sits in front of all of this. It collects your answers and 
 | Analyzer | Examples |
 |---|---|
 | **auth** | SPF, DKIM and DMARC results read from the receiving server's `Authentication-Results`. Only the topmost stamp (or a server you name) is trusted, because anyone can forge the header inside the email. |
-| **sender** | Malformed From, Reply-To pointing elsewhere (on Gmail, a different mailbox counts), display name faking an address or brand, lookalike and punycode domains, shared-hosting senders such as `onmicrosoft.com`. |
+| **sender** | Malformed From, Reply-To pointing elsewhere (on Gmail, a different mailbox counts), display name faking an address or brand (including Unicode-obfuscated names), lookalike and punycode domains, mixed-script IDN labels, shared-hosting senders such as `onmicrosoft.com`. |
 | **headers** | Missing Received chain, hop count, bulk-mailer tools, Message-ID and Return-Path oddities, malformed structure. Softer for newsletters and mailing lists. |
-| **urls** | Static only: link text vs real target, IP and obfuscated hosts, `user@host` tricks, shorteners, abused TLDs, free hosting, lookalikes, brand-vs-link mismatch. Nothing is ever visited. |
+| **urls** | Static only: link text vs real target, Unicode-confusable and mixed-script hosts, invisible formatting inside URL words, IP and obfuscated hosts, `user@host` tricks, shorteners, abused TLDs, free hosting, lookalikes, brand-vs-link mismatch. Nothing is ever visited. |
 | **attachments** | Executables, double extensions and right-to-left-override names, macro Office files, HTML/SVG, archives holding executables or encrypted, real file type vs claimed type, "see attached" with nothing attached. |
-| **body** | Urgency and credential language, prize and lottery lures, callback scams (charge plus a phone number to call), forms asking for passwords, hidden text, dot-spaced subjects. Word lists cover English, French, Portuguese and Spanish, plus a little Arabic. |
+| **body** | Urgency and credential language, prize and lottery lures, callback scams (charge plus a phone number to call), forms asking for passwords, hidden text, dot-spaced subjects. Keyword matching can recognize configured terms written with supported Unicode lookalikes. Word lists cover English, French, Portuguese and Spanish, plus a little Arabic. |
+| **unicode** | Visible body text: suspicious invisible formatting characters (including consecutive runs), directional controls, and known-brand homoglyphs. Sender names and URL/domain surfaces are handled by their existing analyzers. |
 | **intel** | Links, sender domain and attachment hashes against local blocklists. |
 | **history** | Sender, link domains and hashes seen in phishing *you* labeled; first-time senders (weak, and silent until enough history exists). |
 
@@ -193,8 +194,8 @@ src/arer/
   scoring.py            findings to score, level and overrides
   report.py             defanged terminal and JSON output
   evaluate.py           the measurement harness
-  analyzers/            auth, sender, headers, urls, attachments, body, intel, history
-  util/                 domains, HTML reading, file sniffing, defanging
+  analyzers/            auth, sender, headers, urls, attachments, body, unicode, intel, history
+  util/                 domains, Unicode text helpers, HTML reading, file sniffing, defanging
   intel/                blocklist index and updater
   history/              private labeled history
   ai/                   (planned)
@@ -208,7 +209,7 @@ Treating every input as hostile was a design requirement from the start.
 
 - **Static analysis only.** Attachments are hashed and their first bytes inspected; zip files are only listed. Links are never visited. HTML is parsed, never rendered.
 - **Bounded work.** Limits on file size, parts, URLs and HTML tags; a per-analyzer timeout; a crashing analyzer is recorded in the verdict and the scan continues. (Python threads cannot be killed, so a truly stuck analyzer lingers until exit. Subprocess isolation is on the roadmap.)
-- **Safe output.** URLs, IPs, domains and addresses are defanged; control characters, ANSI escapes and bidirectional-override characters are made visible instead of interpreted.
+- **Safe output.** URLs, IPs, domains and addresses are defanged; control characters, ANSI escapes, invisible formatting characters and bidirectional controls are made visible instead of interpreted.
 - **One network path.** Only `arer feeds update` touches the network: HTTPS only, hard size cap, redirects allowed only to the same host, an update that would shrink a feed below half its size is refused, and each feed is replaced in a single atomic transaction. Domain parsing uses a bundled public-suffix snapshot, so no list is downloaded at scan time. In the menu, this is the one step that asks for confirmation first.
 - **Private history.** It stores hashes, dates, sender domain, verdicts and findings. It never stores bodies, subjects, recipients or attachments, and sender addresses are hashed. Files are created with owner-only permissions.
 - **No self-reinforcement.** The tool never learns from its own verdicts, only from labels you set.
@@ -224,11 +225,11 @@ Phishing Pot is a community-collected phishing feed, and its samples can include
 
 | Verdict threshold | Phishing samples flagged | Legitimate emails flagged | Observed precision in this test |
 |---|---:|---:|---:|
-| `SUSPICIOUS` (20+) | 504 / 690 (73.0%) | 0 / 660 (0.0%) | 100% |
-| `LIKELY_PHISHING` (45+) | 25 / 690 (3.6%) | 0 / 660 (0.0%) | 100% |
+| `SUSPICIOUS` (20+) | 505 / 690 (73.2%) | 0 / 660 (0.0%) | 100% |
+| `LIKELY_PHISHING` (45+) | 22 / 690 (3.2%) | 0 / 660 (0.0%) | 100% |
 | `MALICIOUS` (70+) | 2 / 690 (0.3%) | 0 / 660 (0.0%) | 100% |
 
-At the current `SUSPICIOUS` threshold, Arer flags **504 of 690** phishing-labeled samples; **186** remain below the threshold. None of the 660 legitimate emails was flagged. The report gives an approximate 95% range of 0–1% for the legitimate-mail flag rate, so zero observed false positives in this sample does **not** establish a zero real-world false-positive rate.
+At the current `SUSPICIOUS` threshold, Arer flags **505 of 690** phishing-labeled samples; **185** remain below the threshold. None of the 660 legitimate emails was flagged. The report gives an approximate 95% range of 0–1% for the legitimate-mail flag rate, so zero observed false positives in this sample does **not** establish a zero real-world false-positive rate.
 
 The higher-threshold rows show how many phishing-labeled samples reached each verdict level or higher. They are not separate model configurations. In this run, phishing scores had a median of 29 (range 0–77), while legitimate-mail scores had a median of 1 (range 0–12).
 
@@ -238,19 +239,19 @@ The score sweep shows the trade-off between catching more phishing-labeled sampl
 
 | Minimum score | Phishing samples caught | Legitimate emails flagged |
 |---:|---:|---:|
-| 5 | 94.2% | 12.6% |
-| 10 | 87.0% | 2.0% |
+| 5 | 94.3% | 12.7% |
+| 10 | 86.5% | 2.0% |
 | 15 | 78.6% | 0.0% |
-| **20 (current `SUSPICIOUS`)** | **73.0%** | **0.0%** |
-| 25 | 62.5% | 0.0% |
-| 30 | 48.1% | 0.0% |
-| 35 | 45.1% | 0.0% |
-| 40 | 16.5% | 0.0% |
-| 45 | 3.6% | 0.0% |
+| **20 (current `SUSPICIOUS`)** | **73.2%** | **0.0%** |
+| 25 | 58.6% | 0.0% |
+| 30 | 48.7% | 0.0% |
+| 35 | 45.2% | 0.0% |
+| 40 | 16.2% | 0.0% |
+| 45 | 3.2% | 0.0% |
 
-**Threshold 20 is the current operating point because it retains useful coverage while producing no observed false alarms in the legitimate sample.** Lowering it to 15 raises phishing coverage from 73.0% to 78.6% without adding false alarms in this particular run, but the threshold sweep alone does not establish that the same result will hold on other mail. Lowering it to 10 raises coverage to 87.0% but flags 2.0% of legitimate emails; at 5, 12.6% of legitimate emails are flagged. Threshold 20 is therefore a conservative, precision-oriented choice for the current rule-based phase, not a universally optimal threshold.
+**Threshold 20 is the current operating point because it retains useful coverage while producing no observed false alarms in the legitimate sample.** Lowering it to 15 raises phishing coverage from 73.2% to 78.6% without adding false alarms in this particular run, but the threshold sweep alone does not establish that the same result will hold on other mail. Lowering it to 10 raises coverage to 86.5% but flags 2.0% of legitimate emails; at 5, 12.7% of legitimate emails are flagged. Threshold 20 is therefore a conservative, precision-oriented choice for the current rule-based phase, not a universally optimal threshold.
 
-These results depend on the composition and labels of the evaluation corpus. Since some Phishing Pot messages may be spam or other unwanted mail rather than phishing, the 73.0% figure is best described as coverage of the phishing-labeled samples in this evaluation.
+These results depend on the composition and labels of the evaluation corpus. Since some Phishing Pot messages may be spam or other unwanted mail rather than phishing, the 73.2% figure is best described as coverage of the phishing-labeled samples in this evaluation.
 
 ### What the findings show
 
@@ -262,7 +263,8 @@ The final report highlights several useful signals and several noisy ones:
 - `body.hidden_text` fired on 302 / 690 phishing-labeled samples and none of the legitimate emails in this run.
 - `headers.returnpath_mismatch` fired on 108 / 690 phishing-labeled samples and 187 / 660 legitimate emails.
 - `headers.msgid_domain_mismatch` fired on 47 / 690 phishing-labeled samples and 158 / 660 legitimate emails.
-- `body.hidden_preheader` fired on 156 / 690 phishing-labeled samples and 428 / 660 legitimate emails, making it a particularly noisy signal in this corpus.
+- `body.hidden_preheader` fired on 152 / 690 phishing-labeled samples and 427 / 660 legitimate emails, making it a particularly noisy signal in this corpus.
+- Unicode-related findings included `body.invisible_chars` (6 / 690 phishing, 1 / 660 legitimate), `body.bidi_control` (1 / 690, 0 / 660), `url.text_href_mismatch` (13 / 690, 4 / 660), and `sender.lookalike_domain` (4 / 690, 1 / 660). These counts are finding frequencies, not independent proof of phishing.
 - `headers.parser_defects` fired on 136 / 690 phishing-labeled samples and 160 / 660 legitimate emails.
 
 Other findings that also appeared on legitimate mail include `body.image_only` (62), `body.credential_words` (24), `url.login_keywords` (10), and `url.shortener` / `url.brand_mismatch` (14 each). These frequencies show why individual findings should be interpreted in context rather than treated as decisive evidence by themselves.
@@ -271,7 +273,7 @@ Finding frequencies are not verdict-level accuracy measurements. Findings intera
 
 ### Interpretation and next phase
 
-The final run shows that the current rule-based detector flags **73.0%** of the phishing-labeled samples at the selected threshold, with **zero observed false positives** among 660 legitimate emails. The 186 missed samples and the noisy findings indicate areas for further investigation, but changing weights alone may simply move the trade-off between coverage and false alarms.
+The final run shows that the current rule-based detector flags **73.2%** of the phishing-labeled samples at the selected threshold, with **zero observed false positives** among 660 legitimate emails. The 185 missed samples and the noisy findings indicate areas for further investigation, but changing weights alone may simply move the trade-off between coverage and false alarms.
 
 The next planned research phase is the machine-learning and Explainable AI (XAI) work. It will be evaluated against this rule-based baseline to determine whether it improves detection and how its predictions can be interpreted. XAI is planned work and is not part of the current implementation.
 
@@ -290,7 +292,7 @@ Things measuring taught me, each fixed and covered by a test:
 - Small modern legitimate set, so false-alarm rates are not yet well estimated.
 - Scams with no content signal (for example a lone cloud-storage link from a free-mail address) cannot be caught the first time. The history can catch the sender's next email once you label the first.
 - No PDF, QR-code or image-text inspection, and no macro inspection in legacy `.doc`/`.xls`.
-- Word lists cover a handful of languages and need curating.
+- Word lists cover a handful of languages and need curating. Unicode confusable handling uses a conservative, curated subset; it is not a complete implementation of Unicode TR39.
 - OpenPhish support is implemented but untested against the live feed, and is off by default (non-commercial use only). `.msg` input is untested.
 - `parse --extract-attachments` writes real attachments to disk; use an isolated environment.
 - The interactive menu needs a real terminal. In scripts and automation, use the commands directly.
