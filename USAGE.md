@@ -137,7 +137,7 @@ arer = "arer.cli:main"
 <summary>Starting a project from scratch instead of cloning?</summary>
 
 ```bash
-uv add pydantic pyyaml click tldextract rapidfuzz     # HTML and zip reading use the standard library
+uv add pydantic pyyaml click tldextract rapidfuzz idna  # IDNA validation; HTML and zip reading use the standard library
 uv add --dev pytest
 ```
 
@@ -186,11 +186,13 @@ arer scan mail.eml --json report.json                # save the report for one e
 | `--out DIR` | Save `<name>.report.json` for every email. |
 | `--json FILE` | Save the report for a single email. |
 | `--raw` | Keep real URLs and IPs in saved JSON. By default they are defanged. |
-| `--skip NAME` | Turn off an analyzer, for example `--skip body`. Repeatable. |
+| `--skip NAME` | Turn off an analyzer, for example `--skip body` or `--skip unicode`. Repeatable. |
 | `--save` / `--no-save` | Remember this scan in your private history (see [section 7](#7-your-private-history-and-labels)). Default comes from `config/history.yaml` (`auto_save`, normally off). |
 | `--trust TEXT` | Your own mail server's name, so the parser can find `sender_ip`. |
 | `--config DIR` | Use a different config folder. |
 | `-v` (before the command) | Debug logging: `arer -v scan x.eml`. |
+
+**About `--skip unicode`:** this skips the dedicated visible-body Unicode analyzer only. Unicode-aware body keyword matching and the sender/URL Unicode checks live in their respective analyzers and remain active unless those analyzers are also skipped.
 
 ## 6. Reading a result
 
@@ -448,6 +450,22 @@ Everything adjustable is in `config/rules.yaml`. No code changes are needed.
 
 A typo in this file stops the program with a clear error instead of silently scoring wrong.
 
+### Unicode finding weights
+
+The current provisional defaults are:
+
+| Finding | Default weight |
+|---|---:|
+| `body.invisible_chars` | 5 |
+| `body.bidi_control` | 7 |
+| `body.homoglyph_text` | 8 |
+| `sender.obfuscated_name` | 8 |
+| `sender.mixed_script_domain` | 8 |
+| `url.mixed_script_domain` | 8 |
+| `url.invisible_chars` | 5 |
+
+These are rule weights, not standalone verdicts. Each finding's contribution also depends on confidence and the existing category caps. Review them against representative, independently labeled mail before changing them.
+
 ### Which Authentication-Results to trust
 
 Anyone can forge an `Authentication-Results` line inside an email. Only the stamp added by your own receiving server is believable. By default Arer trusts only the topmost one, which your server added last. To be stricter, name your server in `config/rules.yaml`:
@@ -490,12 +508,13 @@ The lists live in `config/lists/*.txt`. One entry per line, lowercase, `#` for c
 | Analyzer | Finds |
 |---|---|
 | `auth` | SPF fail/softfail, DKIM fail or unsigned, DMARC fail or no policy, or no auth results at all. Also DKIM that passes but is signed by an unrelated domain (random throw-away domains, free `onmicrosoft.com` tenants). Known mail platforms and the sender's own domain are fine. |
-| `sender` | Malformed From, Reply-To pointing elsewhere (on Gmail and other free mail, a different mailbox counts, because the domain tells you nothing), display name showing a different address or claiming a brand, free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
+| `sender` | Malformed From, Reply-To pointing elsewhere (on Gmail and other free mail, a different mailbox counts, because the domain tells you nothing), display name showing a different address or claiming a brand (including supported Unicode-obfuscated brand names), free-mail claiming a brand, lookalike domains (`paypa1-secure.com`), punycode and mixed-script IDN domains, senders on shared domains such as `onmicrosoft.com`, and free-mail addresses (Gmail etc.) with an official-sounding name like "Security Team" or a brand like "Geek Squad". |
 | `headers` | Missing Received headers, more than 8 hops, bulk-mailer tools in X-Mailer, odd Message-ID or Return-Path domains, missing Date, malformed structure. |
-| `urls` | Static link checks only (nothing is ever fetched): link text vs real destination (softened when the click goes to the sender's own domain, e.g. Discord's `dis.gd` -> `click.discord.com`, unless the text names a well-known site), bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
+| `urls` | Static link checks only (nothing is ever fetched): link text vs real destination (softened when the click goes to the sender's own domain, e.g. Discord's `dis.gd` -> `click.discord.com`, unless the text names a well-known site), invisible formatting inside URL words, Unicode-confusable and mixed-script hosts, bare/obfuscated IP hosts, `user@host` tricks, shorteners, abused TLDs, free-hosting domains, lookalikes and brand-as-subdomain, login keywords, plain HTTP, and **message talks about a brand but every link goes to an unrelated domain**. |
 | `attachments` | A message that says "see attached" but has no attachment, executables and scripts, double extensions and right-to-left-override names, macro Office files (also detects `vbaProject.bin` inside a renamed file), HTML/SVG attachments, zips holding executables or password-protected, and files whose real bytes contradict their name (a `.pdf` that is really a program). Content is never opened or run; zips are only listed. |
 | `intel` | Links, sender domain and attachment hashes against the local blocklists (see [Blocklists](#8-blocklists)). |
-| `body` | Prize and lottery lures (also in attachment names), dot-spaced subjects (`Now.get.up.to.1.BTC`), callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data, impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, a large hidden block of text (spam-filter poisoning, strong) or a short hidden preheader (`body.hidden_preheader`, weak and low-weight), HTML padded with junk (made-up tag names, repeated DOCTYPEs, padding tags; many hidden spacer elements are normal in newsletters and are not counted), image-only messages. |
+| `body` | Prize and lottery lures (also in attachment names), dot-spaced subjects (`Now.get.up.to.1.BTC`), callback scams (a charge you "did not authorize" plus a phone number to call, no links needed), pressure language, requests for credentials/payment data (including configured terms written with supported Unicode lookalikes), impersonal greetings (English, French, Portuguese, Spanish, a little Arabic), forms asking for passwords or card data, a large hidden block of text (spam-filter poisoning, strong) or a short hidden preheader (`body.hidden_preheader`, weak and low-weight), HTML padded with junk (made-up tag names, repeated DOCTYPEs, padding tags; many hidden spacer elements are normal in newsletters and are not counted), image-only messages. |
+| `unicode` | Visible body text: suspicious invisible formatting characters (including consecutive runs), bidi controls (with a narrow exception for balanced RTL-only RLE/PDF formatting), and known-brand homoglyphs. The sender and URL analyzers handle their own display-name and domain/URL Unicode checks. |
 | `history` | Sender, link domains and hashes seen in phishing you labeled; first-time senders (see [section 7](#7-your-private-history-and-labels)). |
 
 ## 15. Extending Arer
@@ -548,7 +567,7 @@ Numbers are assigned automatically in the order functions are registered, and **
 
 ## 16. Safety notes
 
-- Output is defanged (`hxxps://evil[.]com`) and stripped of terminal escape codes and right-to-left override characters.
+- Output is defanged (`hxxps://evil[.]com`) and terminal escape codes, invisible formatting characters and bidirectional controls are rendered visibly rather than interpreted.
 - Attachments are hashed and read for their first 16 bytes only. They are never opened or executed.
 - No network access during `scan`. Only `arer feeds update` uses the network.
 - Do not paste real IOCs from raw reports into chat tools or clickable ticket fields.
