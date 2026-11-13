@@ -18,6 +18,8 @@ from typing import NamedTuple
 import tldextract
 from rapidfuzz.distance import Levenshtein
 
+from .unicode_text import mixed_script_text, normalize_host_for_comparison
+
 _TLD = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
 
 
@@ -66,12 +68,13 @@ def decode_host(host: str) -> str:
 
 
 def mixed_script(text: str) -> bool:
-    """True if letters come from more than one script (e.g. Latin + Cyrillic)."""
-    scripts = set()
-    for ch in text:
-        if ch.isalpha():
-            scripts.add(unicodedata.name(ch, "UNKNOWN").split(" ")[0])
-    return len(scripts) > 1
+    """True when an individual word has a suspicious script mixture.
+
+    Unlike the previous whole-string character-name heuristic, this avoids
+    comparing separate words or a Unicode label with an ASCII TLD. Common
+    Japanese and Korean writing-system combinations are treated as compatible.
+    """
+    return mixed_script_text(text)
 
 
 _CONFUSABLE = str.maketrans({
@@ -124,15 +127,17 @@ def lookalike(host: str, brands, legit_domains, suspicious_tlds) -> Lookalike | 
 
     for brand in sorted(brands):
         nb = normalize_confusables(brand)
+        brand_skeleton = normalize_host_for_comparison(brand)
         if label == brand:                               # paypal.top : right name, wrong TLD
             if suffix.split(".")[-1] in suspicious_tlds:
                 consider(brand, "brand_wrong_tld", 0.6)
             continue
         for tok in tokens:
             ntok = normalize_confusables(tok)
+            tok_skeleton = normalize_host_for_comparison(tok)
             if tok == brand and len(tokens) > 1:
                 consider(brand, "brand_plus_words", 0.9)              # paypal-secure.com
-            elif ntok == nb and tok != brand:
+            elif (ntok == nb or tok_skeleton == brand_skeleton) and tok != brand:
                 consider(brand, "homoglyph", 1.0)                     # paypa1.com, раypal.com
             elif len(brand) >= 5 and abs(len(ntok) - len(nb)) <= 1 and Levenshtein.distance(ntok, nb) == 1:
                 consider(brand, "typosquat", 0.8)                     # paypall.com

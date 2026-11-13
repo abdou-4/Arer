@@ -13,12 +13,23 @@ from urllib.parse import unquote, urlsplit
 from ..models import Email
 from ..util.domains import (brand_in_subdomain, decode_host, is_punycode, lookalike,
                             mixed_script, registrable, split_host)
+from ..util.unicode_text import (
+    codepoint_descriptions, invisible_char_records, mixed_script_labels,
+    normalize_host_for_comparison,
+)
 from ..util.html import parse_html
 from ..util.urlcollect import extract_urls
 from .base import Analyzer, register
 
 MAX_URLS = 200
-SHOWN_HOST = re.compile(r"^(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,24})(?:[/:?#].*)?$", re.I)
+_HOST_LABEL = r"[^\W_](?:[^\W_]|-|\u200b|\u200c|\u200d|\u2060|\ufeff|\u00ad)*"
+# Preserve the old ASCII TLD rule (2-24 letters), while allowing Unicode
+# letters and combining marks for internationalized TLDs. The previous broad
+# _HOST_LABEL final component also accepted numeric/overlong TLDs, creating
+# new false-positive URL mismatches for ordinary ASCII link text.
+_TLD_LETTER = r"[^\W\d_]"
+_TLD_LABEL = rf"{_TLD_LETTER}(?:{_TLD_LETTER}|[\u0300-\u036f]){{1,23}}"
+SHOWN_HOST = re.compile(rf"^(?:https?://)?(({_HOST_LABEL}\.)+{_TLD_LABEL})(?:[/:?#].*)?$", re.I)
 INT_HOST = re.compile(r"^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,3}$", re.I)   # 2130706433, 0x7f.1, 0177.0.0.1
 # strong words alone are suspicious; weak words are everywhere in legit URLs, so two are needed
 STRONG_LOGIN = {"login", "signin", "logon", "verify", "verification", "webscr", "password", "passwd",
@@ -51,13 +62,16 @@ class Urls(Analyzer):
         urls = extract_urls(email, info, MAX_URLS)
 
         hits: dict[str, dict] = {}
-        def hit(fid, conf, summary, url):
-            h = hits.setdefault(fid, {"conf": 0.0, "summary": summary, "urls": [], "n": 0})
+        def hit(fid, conf, summary, url, unicode_evidence=None):
+            h = hits.setdefault(fid, {"conf": 0.0, "summary": summary, "urls": [], "n": 0,
+                                      "unicode_evidence": []})
             h["n"] += 1
             if conf > h["conf"]:
                 h["conf"], h["summary"] = conf, summary
             if len(h["urls"]) < 5 and url not in h["urls"]:
                 h["urls"].append(url)
+            if unicode_evidence and len(h["unicode_evidence"]) < 5:
+                h["unicode_evidence"].append(unicode_evidence)
 
         # ---- link text says one thing, href goes elsewhere ---------------- #
         pairs = list(info.links) if info else []
@@ -69,20 +83,28 @@ class Urls(Analyzer):
                 target = (urlsplit(href).hostname or "").lower() if href.lower().startswith("http") else ""
             except ValueError:
                 continue
-            if m and target and registrable(m.group(1).lower()) != registrable(target):
-                shown = m.group(1).lower()
-                # a click-tracker usually carries the real destination inside its own URL: soften, don't ignore
-                tracked = shown in unquote(unquote(href)).lower() or registrable(shown) in unquote(unquote(href)).lower()
-                # The click goes to the sender's OWN domain (Discord: text dis.gd -> click.discord.com). That is only
-                # deceptive when the text names a well-known site ("paypal.com" -> evil.example), so soften otherwise.
+            if m and target:
+                shown_original = m.group(1).strip().lower()
+                shown = normalize_host_for_comparison(shown_original)
+                target_normalized = normalize_host_for_comparison(decode_host(target))
                 shown_reg = registrable(shown)
+                target_reg = registrable(target_normalized)
+                if shown_reg == target_reg:
+                    continue
+                # A click-tracker usually carries the real destination inside its URL: soften, don't ignore.
+                decoded_href = unquote(unquote(href)).lower()
+                tracked = shown in normalize_host_for_comparison(decoded_href) or shown_reg in normalize_host_for_comparison(decoded_href)
+                # The click goes to the sender's OWN domain (Discord: text dis.gd -> click.discord.com).
                 known_shown = shown_reg in legit or any(b in shown_reg.split(".")[0] for b in brands)
-                own_target = bool(from_reg) and registrable(target) == from_reg and not known_shown
+                own_target = bool(from_reg) and target_reg == normalize_host_for_comparison(from_reg) and not known_shown
                 conf = (0.4 if bulk else 1.0) * (0.3 if (tracked or own_target) else 1.0)
+                details = codepoint_descriptions(shown_original)
                 hit("url.text_href_mismatch", conf,
-                    f"Link text shows {shown} but goes to {target}"
+                    f"Link text shows {shown_original} but goes to {target}"
                     + (" (looks like a click-tracker)" if tracked else " (the sender's own domain)" if own_target else ""),
-                    f"{text[:80]} -> {href[:120]}")
+                    f"{text[:80]} -> {href[:120]}",
+                    unicode_evidence={"shown_host": shown_original, "normalized_host": shown,
+                                      "codepoints": details} if details else None)
 
         # ---- per-URL rules ------------------------------------------------ #
         for url in urls:
@@ -99,11 +121,18 @@ class Urls(Analyzer):
                 hit("url.ip_host", 1.0, f"Link points to a bare IP address ({host})", url)
                 continue
 
+            url_invisible = invisible_char_records(url, STRONG_LOGIN | WEAK_LOGIN)
+            if url_invisible:
+                hit("url.invisible_chars", 0.8,
+                    "URL contains invisible formatting characters inside words", url,
+                    unicode_evidence={"url": url[:180], "characters": url_invisible})
+
             dhost = decode_host(host)
             reg = registrable(dhost)
             if reg == from_reg or reg in legit:
                 continue                                         # the sender's own / known-good domains
 
+            bad_labels = mixed_script_labels(dhost) if not is_punycode(host) else []
             if is_punycode(host):
                 hit("url.punycode", 1.0 if mixed_script(dhost) else 0.6,
                     f"Link uses an internationalised domain ({host})", url)
@@ -118,8 +147,16 @@ class Urls(Analyzer):
                 hit("url.many_subdomains", 0.5 if bulk else 1.0, f"Link has {len(sub.split('.'))} subdomain levels ({host[:60]})", url)
             look = lookalike(dhost, brands, legit, tlds)
             if look:
+                unicode_evidence = ({"domain": host, "labels": bad_labels,
+                                     "codepoints": codepoint_descriptions(host)} if bad_labels else None)
                 hit("url.lookalike_domain", look.confidence,
-                    f"Link domain {reg} imitates '{look.brand}' ({look.kind.replace('_', ' ')})", url)
+                    f"Link domain {reg} imitates '{look.brand}' ({look.kind.replace('_', ' ')})",
+                    url, unicode_evidence=unicode_evidence)
+            elif bad_labels:
+                hit("url.mixed_script_domain", 0.8,
+                    f"Link domain contains mixed-script label(s): {', '.join(bad_labels)}", url,
+                    unicode_evidence={"domain": host, "labels": bad_labels,
+                                      "codepoints": codepoint_descriptions(host)})
             elif (b := brand_in_subdomain(dhost, brands, legit)):
                 hit("url.lookalike_domain", 0.9, f"'{b}' is used as a subdomain of unrelated domain {reg}", url)
             if p.scheme == "http":
@@ -155,5 +192,6 @@ class Urls(Analyzer):
                         f"Message is about {', '.join(mentioned)}, but its links go only to unrelated domain(s): {', '.join(doms)}",
                         unrelated[0][1])
 
-        return [self.finding(fid, h["summary"], h["conf"], urls=h["urls"], count=h["n"])
+        return [self.finding(fid, h["summary"], h["conf"], urls=h["urls"], count=h["n"],
+                             unicode_evidence=h["unicode_evidence"])
                 for fid, h in sorted(hits.items())]

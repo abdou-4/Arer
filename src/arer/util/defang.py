@@ -34,7 +34,10 @@ def defang(text: str) -> str:
 
 # --- 2. terminal / log safety ----------------------------------------------
 # C0/C1 control chars (includes ESC, so ANSI sequences die) + bidi override/isolate chars
-_UNSAFE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]")
+_UNSAFE = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u202a-\u202e"
+    r"\u2060-\u2064\u2066-\u2069\u200b-\u200f\ufeff\U000e0000-\U000e007f]"
+)
 
 
 def safe_text(s: Any, max_len: int = 300) -> str:
