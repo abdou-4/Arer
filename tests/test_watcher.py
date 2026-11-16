@@ -175,3 +175,76 @@ def test_watch_requires_an_existing_folder():
     from arer.cli import main
     res = CliRunner().invoke(main, ["watch", "/no/such/drop"])
     assert res.exit_code == 2
+
+
+# --------------------------- R1.3: the exit allowlist ------------------------ #
+
+
+@pytest.mark.parametrize("rc", [0, 3, 4, 5, 6])
+def test_every_valid_verdict_exit_is_handled(tmp_path, rc):
+    drop = drop_with(tmp_path, "p.eml")
+    (o,) = poll_once(drop, runner=fake_runner(rc, stdout="verdict line"))
+    assert not o.failed and o.dest == drop / HANDLED_DIR / "p.eml"
+
+
+@pytest.mark.parametrize("rc", [1, 2, 7, -9, -11, 127, 99])
+def test_operational_signal_and_unknown_exits_are_failed(tmp_path, rc):
+    """R1.3: ONLY the verdict allowlist counts as success. Exit 7 (analysis
+    error), signal kills (negative) and unknown/future codes must never be
+    archived as successfully handled."""
+    drop = drop_with(tmp_path, "p.eml")
+    (o,) = poll_once(drop, runner=fake_runner(rc, stdout="some output"))
+    assert o.failed and o.dest == drop / FAILED_DIR / "p.eml"
+    if rc < 0:
+        assert "signal" in o.detail
+    elif rc in (1, 2):
+        assert "exit" in o.detail
+    else:
+        assert "not a valid verdict code" in o.detail
+
+
+@pytest.mark.parametrize("rc", [-9, -11, 7])
+def test_watch_once_exits_1_for_nonverdict_exits(tmp_path, rc):
+    from arer.cli import main
+    drop = drop_with(tmp_path, "p.eml")
+    import arer.watcher as w
+    orig = w._real_runner
+    w._real_runner = fake_runner(rc, stdout="looks plausible")
+    try:
+        r = CliRunner().invoke(main, ["watch", str(drop), "--once"])
+    finally:
+        w._real_runner = orig
+    assert r.exit_code == 1 and (drop / FAILED_DIR / "p.eml").is_file()
+
+
+def test_launch_failure_is_a_failed_intake(tmp_path):
+    drop = drop_with(tmp_path, "p.eml")
+
+    def run(argv, timeout):
+        raise OSError("no such interpreter")
+
+    (o,) = poll_once(drop, runner=run)
+    assert o.failed and "could not launch scan" in o.detail and o.dest is None
+    assert (drop / "p.eml").is_file()          # nothing was lost
+
+
+def test_archive_failure_becomes_a_failed_outcome_and_the_pass_continues(tmp_path):
+    """R6.5: an OSError during archive (disk full, permissions) must not
+    crash the poll loop."""
+    drop = drop_with(tmp_path, "a.eml", "b.eml")
+
+    import arer.watcher as w
+    orig_archive = w.archive
+    def broken_archive(mail, dest_dir):
+        if mail.name == "a.eml":
+            raise OSError("disk full")
+        return orig_archive(mail, dest_dir)
+    w.archive = broken_archive
+    try:
+        outs = poll_once(drop, runner=fake_runner(0, stdout="ok"))
+    finally:
+        w.archive = orig_archive
+    assert [o.failed for o in outs] == [True, False]
+    assert "disk full" in outs[0].detail
+    assert (drop / "a.eml").is_file()                    # still there, nothing lost
+    assert (drop / HANDLED_DIR / "b.eml").is_file()

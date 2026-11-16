@@ -16,6 +16,13 @@ kill the watcher or poison the next mail:
               `watch --once` exits 1 if any mail failed - the same contract
               as `arer parse` and `arer scan`.
 
+R1.3: classification is an ALLOWLIST, never a numeric range. Only the valid
+verdict exits (0, 3, 4, 5, 6 - arer.exitcodes.VERDICT_EXITS) count as a
+completed scan and land in handled/. Everything else is failed/: operational
+errors (1, 2), the analysis-failure code (7), negative return codes (the
+child was killed by a signal), and ANY unknown/future code. A crashed or
+signal-killed scan can therefore never be archived as successfully handled.
+
 v1 watches the TOP LEVEL of the drop folder only, and only files with a
 known mail extension (same list as `arer scan` minus content sniffing): a
 half-written file with an unknown extension is never read or moved
@@ -30,12 +37,12 @@ import sys
 from pathlib import Path
 from typing import Callable, NamedTuple
 
+from .exitcodes import VERDICT_EXITS
 from .loader import SCAN_SUFFIXES
 
-HANDLED_DIR = "handled"     # scanned without a scan-level failure (verdict may still be alert-level)
-FAILED_DIR = "failed"       # scan itself failed (exit 1/2) or the mail timed out
-
-_FAILED_EXITS = {1, 2}      # scan's own failure codes (docs/cli-contract.md); >= 3 is a verdict
+HANDLED_DIR = "handled"     # scan completed with a valid verdict exit (docs/cli-contract.md)
+FAILED_DIR = "failed"       # anything else: exit 1/2/7, a signal kill, an unknown code, a timeout,
+                            # a launch error, or an archive failure (R1.3 allowlist)
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -98,23 +105,34 @@ def _last_line(text: str | None) -> str:
 
 def scan_one(mail: Path, *, argv: list[str], timeout: float = 60.0,
              runner: Runner | None = None) -> Outcome:
-    """Scan one mail in a fresh subprocess and archive it. A hang is killed
-    at `timeout` seconds; a failed scan (exit 1/2) or a timeout archives the
-    mail to failed/ and reports the reason - the pass continues."""
+    """Scan one mail in a fresh subprocess and archive it.
+
+    R1.3 allowlist: only VERDICT_EXITS (0, 3, 4, 5, 6) is a completed scan ->
+    handled/. A hang is killed at `timeout` seconds; operational exits (1, 2),
+    the analysis-failure code (7), signal kills (negative codes), unknown
+    codes, launch errors and archive failures all archive the mail to failed/
+    and report the reason - the pass continues."""
     run = runner or _real_runner
     try:
         proc = run(argv, timeout)
     except subprocess.TimeoutExpired as e:
         dest = archive(mail, mail.parent / FAILED_DIR)
         return Outcome(mail, dest, True, f"timed out after {e.timeout:g}s")
+    except OSError as e:                                   # launch failure is a failed intake too
+        return Outcome(mail, None, True, f"could not launch scan ({e})")
     rc = proc.returncode
-    if rc in _FAILED_EXITS:
-        dest = archive(mail, mail.parent / FAILED_DIR)
-        detail = _last_line(getattr(proc, "stderr", "")) or f"scan failed (exit {rc})"
-        return Outcome(mail, dest, True, detail)
-    dest = archive(mail, mail.parent / HANDLED_DIR)
-    detail = _last_line(getattr(proc, "stdout", "")) or f"exit {rc}"
-    return Outcome(mail, dest, False, detail)
+    if rc in VERDICT_EXITS:
+        dest = archive(mail, mail.parent / HANDLED_DIR)
+        detail = _last_line(getattr(proc, "stdout", "")) or f"exit {rc}"
+        return Outcome(mail, dest, False, detail)
+    dest = archive(mail, mail.parent / FAILED_DIR)
+    if rc < 0:
+        detail = f"scan killed by signal {-rc}"
+    elif _last_line(getattr(proc, "stderr", "")):
+        detail = _last_line(getattr(proc, "stderr", ""))
+    else:
+        detail = f"scan exited {rc}, not a valid verdict code"
+    return Outcome(mail, dest, True, detail)
 
 
 def _real_runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
@@ -124,6 +142,16 @@ def _real_runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess
 def poll_once(drop: Path, *, alerts_dir: Path | None = None, timeout: float = 60.0,
               skip: tuple[str, ...] = (), runner: Runner | None = None) -> list[Outcome]:
     """One pass over the drop folder: scan every waiting mail, archive it,
-    report the outcomes. One bad mail never stops the pass."""
-    return [scan_one(m, argv=scan_command(m, alerts_dir, skip), timeout=timeout, runner=runner)
-            for m in mail_candidates(drop)]
+    report the outcomes.
+
+    R1.3/R6.5: every candidate is wrapped in its own exception boundary - one
+    OSError (a vanished file, a failed archive move, a permission error)
+    becomes a failed Outcome for THAT mail; the pass always continues."""
+    outcomes = []
+    for m in mail_candidates(drop):
+        try:
+            outcomes.append(scan_one(m, argv=scan_command(m, alerts_dir, skip),
+                                     timeout=timeout, runner=runner))
+        except Exception as e:                             # noqa: BLE001 - one bad mail never stops the pass
+            outcomes.append(Outcome(m, None, True, f"watcher error ({type(e).__name__}): {e}"))
+    return outcomes
