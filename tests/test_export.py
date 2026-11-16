@@ -54,7 +54,7 @@ def test_export_keys_are_frozen():
     alerts = read_alerts(make_queue(tmp_path_mkdir()))
     row = export_row(alerts[0].alert, None, alerts[0].path.name)
     assert list(row) == EXPORT_KEYS == COLUMNS
-    assert row["schema"] == "arer.alert.v1"
+    assert row["schema"] == "arer.alert.v2"
     assert row["record_file"].endswith(".alert.json")
     assert row["disposition_status"] == "" and row["disposition_set_utc"] == ""
 
@@ -110,7 +110,7 @@ def test_render_is_safe_by_default_and_raw_stays_raw():
     assert "https://" not in safe                              # export is safe by default
     raw_text = render([row], "jsonl", defang=False)
     assert "https://evil-phish.example" in raw_text            # --raw passes through
-    assert json.loads(raw_text)["schema"] == "arer.alert.v1"
+    assert json.loads(raw_text)["schema"] == "arer.alert.v2"
 
 
 # --------------------------- CLI --------------------------------------------- #
@@ -123,7 +123,7 @@ def test_cli_export_jsonl_to_stdout_and_file(tmp_path):
     rec = read_alerts(d)[0]
     out = CliRunner().invoke(main, ["alerts", "export", str(d)])
     assert out.exit_code == 0, out.output
-    assert json.loads(out.output.splitlines()[0])["schema"] == "arer.alert.v1"
+    assert json.loads(out.output.splitlines()[0])["schema"] == "arer.alert.v2"
     f = tmp_path / "dump" / "alerts.jsonl"
     to_file = CliRunner().invoke(main, ["alerts", "export", str(d), "-o", str(f)])
     assert to_file.exit_code == 0 and "exported 1 alert" in to_file.output

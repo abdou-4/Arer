@@ -193,7 +193,7 @@ def test_alert_queue_show_and_export(tmp_path, env):
     queue = _alert_queue(tmp_path)
     aid = read_alerts(queue)[0].alert.alert_id[:8]
     r = run(env, f"{item('Alert queue')}\n3\n{queue}\n{aid}\n0\n")     # show
-    assert '"schema": "arer.alert.v1"' in r.output
+    assert '"schema": "arer.alert.v2"' in r.output
     out = tmp_path / "siem.jsonl"
     e = run(env, f"{item('Alert queue')}\n4\n{queue}\n1\n{out}\n0\n")   # export jsonl to file
     assert "exported 1 alert" in e.output and out.is_file()

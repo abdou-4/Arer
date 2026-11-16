@@ -17,6 +17,7 @@ Exit codes (frozen table, see docs/cli-contract.md and src/arer/exitcodes.py)
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
@@ -190,12 +191,19 @@ def _save(cfg, email, verdict, name) -> int:
               help="Folder for alert records (one `<alert_id>.alert.json` per alert-level email, "
                    "schema arer.alert.v1, see docs/alert-record.md).")
 @click.option("--raw", is_flag=True, help="Do not defang saved JSON (keeps real URLs/IPs).")
+@click.option("--store-sender", is_flag=True,
+              help="Store the sender's plaintext address in alert records (v2 stores the "
+                   "sender DOMAIN by default - R4.5 privacy default).")
+@click.option("--jsonl", "jsonl_path", type=click.Path(dir_okay=False, path_type=Path),
+              help="Write one versioned JSON record per scanned message to this file "
+                   "(load failures become structured error lines).")
 @click.option("--skip", multiple=True, help="Analyzer name to skip (repeatable).")
 @click.option("--save/--no-save", default=None,
               help="Remember this scan in your history (default: config/history.yaml auto_save, normally off).")
 @click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
               help="Config folder (default: ./config or $PHISHSCOPE_CONFIG).")
-def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, skip, save, config_dir):
+def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, store_sender,
+         jsonl_path, skip, save, config_dir):
     """Analyze .eml/.msg/.json file(s) or folder(s) and print a verdict."""
     try:
         cfg = load_config(config_dir)
@@ -217,6 +225,21 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
         out_dir.mkdir(parents=True, exist_ok=True)
     if alerts_dir:
         alerts_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_fh = jsonl_path.open("w", encoding="utf-8") if jsonl_path else None
+
+    def _jsonl_line(source: Path, *, ok: bool, v=None, error: str = "") -> None:
+        """One versioned record per message (R3.3); operational failures are
+        structured error lines, never silent."""
+        if jsonl_fh is None:
+            return
+        line = {"schema": "arer.scan-jsonl.v1", "source_file": source.name, "ok": ok}
+        if v is not None:
+            line["exit_code"] = scan_exit_code(v)
+            line["report"] = json.loads(to_json(v, defang=not raw))
+        else:
+            line["error"] = error
+        jsonl_fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+        jsonl_fh.flush()
 
     codes, failed = [], False
     for p in paths:
@@ -224,6 +247,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
             email = load_any(p, cfg, trust=trust)
         except LoadError as e:
             click.echo(click.style(f"✗ {safe_text(e, 250)}", fg="red"), err=True)
+            _jsonl_line(p, ok=False, error=safe_text(e, 250))
             failed = True
             continue
 
@@ -256,14 +280,17 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
             # evasive or damaged mail is never silently dropped. The record
             # carries verdict.analyzer_errors, and (R4) it can never be exported
             # as a confirmed indicator because of errors alone.
-            alert = build_alert(v, email, p.name, cfg)
+            alert = build_alert(v, email, p.name, cfg, store_sender=store_sender)
             try:
                 write_alert(alert, alerts_dir, defang=not raw)
             except AlertCollisionError as e:            # never overwrite another mail's record
                 click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
                 failed = True
+        _jsonl_line(p, ok=True, v=v)
         codes.append(code)
 
+    if jsonl_fh is not None:
+        jsonl_fh.close()
     if failed:
         codes.append(1)
     sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)  # noqa: RUF015 - sys.exit wants the code, not the arg
@@ -309,7 +336,7 @@ def alerts_list(directory, level, status):
     if rows:
         click.echo(f"{'alert_id':<14}{'generated':<21}{'level':<18}{'score':>5}  {'status':<14}{'sha256':<14}{'from':<26}file")
         for a, st in rows:
-            sender = safe_text(a.scan.from_, 60)
+            sender = safe_text(a.scan.from_ or a.scan.from_domain, 60)
             click.echo(f"{a.alert_id[:12]:<14}{a.generated_utc:<21}{a.verdict.level.value:<18}{a.verdict.score:>5}  "
                        f"{st:<14}{a.verdict.sha256[:12]:<14}{sender:<26}{safe_text(a.source_file, 40)}")
     elif not bad:
@@ -450,7 +477,7 @@ def alerts_campaigns(directory, level, status):
         click.echo(f"{'sha256':<14}{'seen':>5}  {'level':<18}{'score':>5}  "
                    f"{'first':<21}{'last':<21}{'from':<26}status")
         for members, lvl, score, st in rows:
-            sender = safe_text(members[-1][0].scan.from_, 60)
+            sender = safe_text(members[-1][0].scan.from_ or members[-1][0].scan.from_domain, 60)
             click.echo(f"{members[0][0].verdict.sha256[:12]:<14}{len(members):>5}  {lvl.value:<18}{score:>5}  "
                        f"{members[0][0].generated_utc:<21}{members[-1][0].generated_utc:<21}{sender:<26}{st}")
     elif not bad:
@@ -640,6 +667,9 @@ def eval_cmd(root, from_history, with_history_signals, only, skip_dirs, details,
         click.echo(click.style(msg, fg="red"), err=True)
         sys.exit(1)
     click.echo(render(ev, cfg, details=details))
+    from .config import config_hash
+    click.echo(click.style(f"config_hash: {config_hash(cfg)}   (same tuning must be used "
+                           "for any comparison across runs)", fg="cyan"))
 
 
 # --------------------------------------------------------------------------- #

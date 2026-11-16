@@ -78,7 +78,8 @@ def test_valid_record_round_trips(tmp_path):
     p = tmp_path / "x.alert.json"
     write_json(p, VALID)
     a = read_alert(p)
-    assert a.schema_ == SCHEMA_VERSION == "arer.alert.v1"
+    # the fixture is a v1 record: v1 keeps reading back exactly as before
+    assert a.schema_ == "arer.alert.v1" and SCHEMA_VERSION == "arer.alert.v2"
     assert a.alert_id == "a" * 32
     assert a.generated_utc == "2026-11-17T09:30:00Z"
     assert a.scan.from_ == "news[@]discord[.]com"
@@ -178,7 +179,7 @@ def test_real_produced_record_reads_back(alert_dir):
     assert len(reads) == 1
     a = reads[0].alert
     assert a is not None
-    assert a.schema_ == "arer.alert.v1"
+    assert a.schema_ == "arer.alert.v2"
     assert a.source_file == "salad[.]eml"
     assert a.verdict.level.value in {"SUSPICIOUS", "LIKELY_PHISHING", "MALICIOUS"}
     assert a.verdict.sha256 and len(a.verdict.sha256) == 64
@@ -226,7 +227,7 @@ def test_cli_alerts_show_by_id_prefix(alert_dir):
     full_id = reads[0].alert.alert_id
     res = CliRunner().invoke(main, ["alerts", "show", str(alert_dir), full_id[:8]])
     assert res.exit_code == 0, res.output
-    assert json.loads(res.output)["schema"] == "arer.alert.v1"
+    assert json.loads(res.output)["schema"] == "arer.alert.v2"
 
 
 def test_cli_alerts_show_rejects_bad_ids(alert_dir):

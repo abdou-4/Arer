@@ -88,6 +88,7 @@ class FileInfo(_Base):
     sha256_verified: bool = False
     artifact_sha256: str = ""
     generated_by: str = ""             # provenance note from the parser JSON, if any
+    mail_parser_version: str = ""      # backend version the parser JSON was made with
 
     @classmethod
     def from_raw(cls, raw: dict) -> "FileInfo":
@@ -99,6 +100,7 @@ class FileInfo(_Base):
             size_bytes=raw.get("size_bytes") or 0,
             md5=_s(h.get("md5")), sha1=_s(h.get("sha1")), sha256=_s(h.get("sha256")),
             generated_by=_s(raw.get("generated_by")),
+            mail_parser_version=_s(raw.get("mail_parser_version")),
         )
 
 

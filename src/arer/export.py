@@ -25,10 +25,12 @@ from .disposition import Disposition
 from .util.defang import clean_deep
 
 EXPORT_KEYS = [
-    "schema", "alert_id", "generated_utc", "logic_hash",
-    "level", "score", "sha256", "subject", "from", "message_id", "date",
+    "schema", "alert_id", "generated_utc", "logic_hash", "config_hash",
+    "level", "score", "sha256", "sha256_verified", "subject",
+    "from", "from_domain", "message_id", "date",
     "source_file", "record_file",
     "by_category", "finding_ids", "overridden_by", "analyzer_errors",
+    "analysis_complete",
     "disposition_status", "disposition_note", "disposition_set_utc",
 ]
 COLUMNS = EXPORT_KEYS              # CSV: one column per key, same order
@@ -42,11 +44,14 @@ def export_row(a: Alert, d: Disposition | None, record_file: str) -> dict:
         "alert_id": a.alert_id,
         "generated_utc": a.generated_utc,
         "logic_hash": a.logic_hash,
+        "config_hash": a.config_hash,
         "level": v.level.value,
         "score": v.score,
         "sha256": v.sha256,
+        "sha256_verified": a.sha256_verified,
         "subject": v.subject,
         "from": a.scan.from_,
+        "from_domain": a.scan.from_domain,
         "message_id": a.scan.message_id,
         "date": a.scan.date,
         "source_file": a.source_file,
@@ -55,6 +60,7 @@ def export_row(a: Alert, d: Disposition | None, record_file: str) -> dict:
         "finding_ids": [f.id for f in v.findings],
         "overridden_by": v.overridden_by or "",
         "analyzer_errors": list(v.analyzer_errors),
+        "analysis_complete": a.analysis_complete,
         "disposition_status": d.status if d else "",
         "disposition_note": d.note if d else "",
         "disposition_set_utc": d.set_utc if d else "",

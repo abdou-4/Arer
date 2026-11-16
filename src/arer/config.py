@@ -3,9 +3,20 @@ config.py - loads config/rules.yaml and config/lists/*.txt into one validated ob
 
 Everything tunable lives in config files, so changing a weight needs no code edit.
 Bad config fails LOUDLY at startup, instead of silently producing wrong scores.
+
+R3.2: config_hash() fingerprints the VALIDATED, EFFECTIVE scoring
+configuration - thresholds, category caps, every rules.yaml weight, the
+built-in default weights, level overrides and all active list contents.
+Changing any of those changes the hash; reformatting rules.yaml (whitespace,
+key order, comments) does not. It is stored with every alert, saved scan,
+evaluation and model card so results are never compared across silently
+different settings. logic_hash() (in history/store.py) stays the fingerprint
+of the CODE; config_hash() is the fingerprint of the TUNING.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from functools import lru_cache
@@ -234,6 +245,25 @@ def load_config(config_dir: str | Path | None = None) -> Config:
         if s.path and not Path(s.path).is_absolute():
             s.path = str(base.resolve().parent / s.path)
     return cfg
+
+
+def config_hash(cfg: Config) -> str:
+    """sha256[:16] over the canonical effective scoring configuration.
+
+    Canonical form: sorted keys, no whitespace, frozensets as sorted lists.
+    Stable across process runs; independent of YAML formatting."""
+    payload = {
+        "thresholds": cfg.thresholds.model_dump(),
+        "caps": dict(sorted(cfg.caps.items())),
+        "weights": dict(sorted(cfg.weights.items())),
+        "default_weights": dict(sorted(DEFAULT_WEIGHTS.items())),
+        "overrides": sorted(
+            ({"finding": o.finding, "min_level": o.min_level.value} for o in cfg.overrides),
+            key=lambda o: (o["finding"], o["min_level"])),
+        "lists": {k: sorted(v) for k, v in sorted(cfg.lists.items())},
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 @lru_cache(maxsize=1)

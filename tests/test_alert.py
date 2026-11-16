@@ -25,7 +25,8 @@ from arer.models import Email, Level
 from arer.pipeline import run_pipeline
 
 cfg = load_config()
-GOLDEN = Path(__file__).parent / "golden" / "alert_v1.json"
+GOLDEN = Path(__file__).parent / "golden" / "alert_v2.json"
+GOLDEN_V1 = Path(__file__).parent / "golden" / "alert_v1.json"
 
 
 def mk(frm="news@discord.com", subject="Your account is locked", text="", html="", auth=None,
@@ -60,14 +61,21 @@ def fixed_alert(email, name="alert.eml"):
 def test_schema_marker_and_key_sets_are_frozen():
     a = fixed_alert(mk(auth=AUTH_FAIL))
     d = json.loads(to_json(a))
-    assert d["schema"] == SCHEMA_VERSION == "arer.alert.v1"
+    assert d["schema"] == SCHEMA_VERSION == "arer.alert.v2"
     assert set(d) == {"schema", "alert_id", "generated_utc", "source_file",
-                      "logic_hash", "scan", "verdict"}
-    assert set(d["scan"]) == {"from", "message_id", "date"}
+                      "logic_hash", "scan", "verdict",
+                      # v2 (R3): config fingerprint, versions, analysis state,
+                      # structured reasons/indicators, campaign id, privacy
+                      "config_hash", "engine_version", "parser_version",
+                      "sha256_verified", "analysis_complete", "analysis_errors",
+                      "reasons", "indicators", "body_fingerprint", "campaign_id"}
+    assert set(d["scan"]) == {"from", "message_id", "date", "from_domain"}
     assert set(d["verdict"]) == {"sha256", "subject", "score", "level", "by_category",
                                  "findings", "overridden_by", "analyzer_errors"}
     for f in d["verdict"]["findings"]:
         assert set(f) == {"id", "category", "summary", "evidence", "weight", "confidence", "source"}
+    for r in d["reasons"]:
+        assert set(r) == {"finding", "category", "weight", "confidence", "points"}
 
 
 def test_golden_alert_record():
@@ -78,6 +86,16 @@ def test_golden_alert_record():
         GOLDEN.write_text(actual, encoding="utf-8")
         pytest.skip("golden regenerated - commit it and review the diff")
     assert actual == GOLDEN.read_text(encoding="utf-8")
+
+
+def test_v1_records_still_read_back():
+    """READ compatibility: an old queue's v1 records must keep loading with
+    the same fields they always had - v2 additions are optional for readers."""
+    from arer.alert import read_alert
+    a = read_alert(GOLDEN_V1)
+    assert a.schema_ == "arer.alert.v1"
+    assert a.alert_id and a.logic_hash and a.verdict.subject
+    assert a.config_hash == "" and a.campaign_id == "" and a.indicators == {}
 
 
 def test_alert_levels_match_the_exit_code_contract():
@@ -147,7 +165,7 @@ def test_scan_alerts_dir_writes_records_for_alert_level_emails_only(tmp_path):
     # R1.1: the record file name is the immutable alert_id, NOT the source name
     assert written[0] != "salad.eml.alert.json" and written[0].endswith(".alert.json")
     d = json.loads((alerts / written[0]).read_text(encoding="utf-8"))
-    assert d["schema"] == "arer.alert.v1"
+    assert d["schema"] == "arer.alert.v2"
     assert written[0] == f"{d['alert_id']}.alert.json"
     assert d["verdict"]["level"] in {"SUSPICIOUS", "LIKELY_PHISHING", "MALICIOUS"}
     assert d["source_file"] == "salad[.]eml"        # stored defanged (v1 stores attacker strings defanged)
