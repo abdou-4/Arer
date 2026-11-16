@@ -22,7 +22,9 @@ Every mail is scanned by a **fresh subprocess** (`python -m arer scan FILE
   then the subprocess is killed and the mail is archived as failed. A hung
   parser can never stall the queue;
 - **exit codes** - the frozen contract (docs/cli-contract.md) decides what
-  happened: exit 0 or >= 3 is a verdict (the mail is handled), exit 1/2 is a
+  happened: a VALID verdict exit (0, 3, 4, 5, 6 - the arer.exitcodes allowlist)
+  means handled; exit 1/2, 7 (analysis error), a signal kill (negative code) or
+  ANY unknown code is a
   scan failure (the mail is failed). A verdict of MALICIOUS is not a
   failure - it is the watcher doing its job.
 
@@ -32,7 +34,7 @@ The watcher **never deletes anything** and never scans a mail twice:
 
     DROP/
       run.eml                 a mail that appeared (scanned on the next pass)
-      handled/run.eml         scanned, whatever the verdict (0 or >= 3)
+      handled/run.eml         scanned, verdict exit 0/3/4/5/6 (allowlist)
       failed/bad.json         scan itself failed (exit 1/2) or it timed out
 
 Archiving never overwrites: a second `run.eml` lands as `handled/run.1.eml`,

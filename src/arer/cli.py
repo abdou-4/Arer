@@ -26,7 +26,7 @@ import click
 
 from .config import ConfigError, load_config
 from .exitcodes import (ALERT_EXITS, ANALYSIS_ERROR_EXIT, EXIT_CODES, EXIT_SEVERITY,
-                        exit_code_for, is_alert_exit)
+                        exit_code_for, is_alert_exit, is_analysis_incomplete, scan_exit_code)
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alerts,
                     to_json as alert_to_json, write_alert)
@@ -185,8 +185,12 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
             continue
 
         v = run_pipeline(email, cfg, skip=set(skip))
+        code = scan_exit_code(v)
         if quiet:
-            click.echo(f"{v.level.value:<18}{v.score:>3}  {safe_text(p.name)}")
+            line = f"{v.level.value:<18}{v.score:>3}  {safe_text(p.name)}"
+            if v.analyzer_errors:
+                line += "  [analysis incomplete - analyzer problems, see the report]"
+            click.echo(line)
         else:
             click.echo(render_terminal(v, cfg))
 
@@ -201,14 +205,18 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
             json_path.write_text(report, encoding="utf-8")
         if out_dir:
             (out_dir / f"{p.name}.report.json").write_text(report, encoding="utf-8")
-        if alerts_dir and is_alert_level(v.level):
+        if alerts_dir and (is_alert_level(v.level) or is_analysis_incomplete(v)):
+            # R1.4: an analysis that failed part-way also lands in the queue, so
+            # evasive or damaged mail is never silently dropped. The record
+            # carries verdict.analyzer_errors, and (R4) it can never be exported
+            # as a confirmed indicator because of errors alone.
             alert = build_alert(v, email, p.name, cfg)
             try:
                 write_alert(alert, alerts_dir, defang=not raw)
             except AlertCollisionError as e:            # never overwrite another mail's record
                 click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
                 failed = True
-        codes.append(EXIT_CODES[v.level])
+        codes.append(code)
 
     if failed:
         codes.append(1)

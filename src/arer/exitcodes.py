@@ -69,3 +69,23 @@ def exit_code_for(level: Level) -> int:
 def is_alert_exit(code: int) -> bool:
     """The explicit allowlist predicate scripts should use instead of `>= 3`."""
     return code in ALERT_EXITS
+
+
+def scan_exit_code(verdict) -> int:
+    """Exit code for one scanned file, including the R1.4 fail-closed rule.
+
+    A run with analyzer errors must never be presented as a fully successful
+    result: errors plus CLEAN or INSUFFICIENT_DATA exit 7 (ANALYSIS_ERROR).
+    A run whose positive findings raised the verdict (SUSPICIOUS or above)
+    keeps its verdict exit - the findings stand - and the errors stay visible
+    in the report, the alert record and the export (verdict.analyzer_errors).
+    """
+    if verdict.analyzer_errors and verdict.level in (Level.CLEAN, Level.INSUFFICIENT_DATA):
+        return ANALYSIS_ERROR_EXIT
+    return EXIT_CODES[verdict.level]
+
+
+def is_analysis_incomplete(verdict) -> bool:
+    """True when analyzers failed and the result is not a positive verdict:
+    exactly the runs that exit 7 and land in the queue flagged incomplete."""
+    return scan_exit_code(verdict) == ANALYSIS_ERROR_EXIT
