@@ -1,0 +1,475 @@
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,10 +1,10 @@
+-# Arer — Explainable AI for Phishing Email Detection
+-### A privacy-conscious, evidence-driven email security tool built around static analysis and configurable risk scoring.
++# Arer — Evidence-Driven Phishing Email Triage
++### A privacy-conscious, local-first email security tool built around rule-based analyzers and configurable risk scoring.
+ 
+ Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`, and JSON email data using independent security analyzers, local threat-intelligence blocklists, and configurable scoring rules. Each verdict includes traceable findings and supporting evidence, so a scan can be reviewed instead of treated as a black-box decision.
+-**Current phase:** Rule-based detection with Unicode-aware phishing checks, evidence-backed scoring, local threat intelligence, private labeled history, a repeatable evaluation harness, and an interactive menu for non-technical users.
++**Current development focus:** Evaluation Integrity & Reproducibility. Arer currently provides rule-based detection with Unicode-aware phishing checks, evidence-backed scoring, local threat intelligence, private labeled history, a repeatable evaluation harness, and an interactive menu for non-technical users.
+ 
+-**Future work:** Machine learning and Explainable AI (XAI). The XAI layer is planned and is not implemented in the current phase.
++**Planned research direction:** Machine learning alongside the existing rules, with explainability for model-assisted findings. ML/XAI is not implemented yet.
+ 
+ > 📖 Full command reference and guides: **[USAGE.md](USAGE.md)**
+ **Jump to:** [Highlights](#highlights) · [Quick start](#quick-start) · [Interactive menu](#interactive-menu) · [Example output](#example-output) · [How it works](#how-it-works) · [What it checks](#what-it-checks) · [Configuration](#configuration) · [Security and privacy](#security-and-privacy-design) · [Evaluation](#evaluation) · [Limitations](#limitations) · [Roadmap](#roadmap)
+@@ -16,9 +16,9 @@ Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`,
+ - **Explainable by construction.** Every point in a verdict traces back to a named finding with its evidence. Weights, caps, thresholds and word lists live in config files, not code.
+ - **Offline blocklists.** About 1.2 million phishing domains and URLs from public feeds, held in a 27 MB hash index. Lookups take microseconds and add no measurable scan time.
+ - **A private, labeled history.** Label an email once and later mail from the same sender, links or attachments is judged by what you decided. Only *your* labels teach it.
+-- **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, an 80/20 dev/test split, and which findings help or hurt.
++- **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, and an 80/20 dev/test split that can keep known campaign groups together through an optional dataset manifest.
+ - **Hostile-input design.** Size limits, per-analyzer timeouts, defanged output, terminal-escape filtering, and no network except one explicit command.
+-- **291 automated tests**, including regression tests for Unicode confusables, invisible characters, bidi controls and IDN handling.
++- **Automated regression coverage** for Unicode confusables, invisible characters, bidi controls and IDN handling.
+ ## Quick start
+ 
+ ```bash
+@@ -187,6 +187,8 @@ uv sync                                  # developed on Python 3.13
+ - **No unsafe deserialization.** Configuration uses `yaml.safe_load`; there are no pickled models.
+ ## Evaluation
+ 
++**Evaluation caveat:** The published results below are a historical full-corpus regression snapshot, not a held-out test. They do not measure generalization to unseen campaigns. Use a manifest with known campaign groups and evaluate `--only test` before making generalization claims.
++
+ The final evaluation run contains **1,350 emails**: 690 samples from [Phishing Pot](https://github.com/rf-peixoto/phishing_pot) and 660 legitimate emails from a modern personal-mail sample (`legit/mine_modern` in the report).
+ Phishing Pot is a community-collected phishing feed, and its samples can include spam or other unwanted messages that are not necessarily credential theft or malicious phishing. The results should therefore be read as performance on this labeled corpus, not as a definitive estimate of real-world phishing detection. During manual follow-up, some messages missed by Arer were also not flagged as phishing by commercial `.eml` analyzers.
+ This is useful comparative context, but it does not independently establish that those messages are benign or that the tools are equivalent.
+diff --git a/USAGE.md b/USAGE.md
+--- a/USAGE.md
++++ b/USAGE.md
+@@ -312,20 +312,32 @@ Tuning weights by feel does not work. `arer eval` scores every sample and tells
+ arer eval                      # everything under data/samples
+ arer eval --details            # also list every sample with its score
+ arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept only as a stress test)
+-arer eval --only dev           # tune on 80% of samples ...
+-arer eval --only test          # ... and check on the other 20% now and then
++arer eval --only dev           # tune on the development split ...
++arer eval --only test          # ... and check the held-out split now and then
+ arer eval --skip body          # what happens if an analyzer is turned off?
+ arer eval --from-history       # re-score your labeled saved scans instantly (no email files)
+ arer eval --config /tmp/cfg    # try a copy of config/ with different weights
+ ```
+ In the menu this is entry **2 (Measure accuracy)**.
+ 
+-**Labels come from folders:** files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`:
++**Labels come from folders:** files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv` with an exact root-relative path:
+ 
+ ```
+-filename,label
+-sample-9.eml,legit
++path,label
++phish/sample-9.eml,legit
+ ```
++
++The older `filename,label` format is still accepted when that basename occurs only once in the dataset. If the same filename exists in multiple folders, the filename-only override is ignored with a warning; use `path` to identify the exact sample. Duplicate override rows for one target are ignored.
++
++**Optional campaign and dataset manifest:** add `data/samples/manifest.csv` to record provenance and known campaign relationships:
++
++```
++path,group_id,dataset,license,reference,collection_date
++phish/sample-1.eml,campaign-001,example-corpus,,,
++phish/sample-2.eml,campaign-001,example-corpus,,,
++```
++
++`path` is required and must identify a mail sample under the dataset root. The other columns are optional metadata. Samples sharing the same non-empty `group_id` are always assigned to the same dev/test split. Use one group ID for a known campaign or message family across the dataset; do not guess groups from a sender or domain. Samples without a group ID retain the original individual content-hash split, and the report warns when that fallback is used. Invalid, duplicate or unknown manifest paths stop evaluation instead of silently falling back.
+ ### What the report shows
+ | Section | Use it to |
+ |---|---|
+@@ -350,7 +362,7 @@ sample-9.eml,legit
+ `arer eval` is only as honest as its samples. Four traps to avoid:
+ 1. **Spam is not legitimate mail, and spam is not phishing.** From the SpamAssassin corpus use only `easy_ham`, `easy_ham_2` and `hard_ham` as `legit/`. Put the `spam` folders in `data/samples/spam/`. Eval ignores that folder.
+ 2. **Era bias.** SpamAssassin mail is from 2002-2003 and has no SPF/DKIM/DMARC results, while modern phishing has them. Findings like `auth.results_missing` then separate your classes by *year*, not by phishing. The fix is modern legitimate mail (below). Until you have it, compare with `arer eval --skip auth --skip headers` to see the content checks without era effects.
+-3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many samples, and the dev/test split can leak. Judge by campaigns, not by counts.
++3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many. Record known campaign siblings with the same `group_id` in `manifest.csv` so they cannot cross the dev/test boundary. Arer does not infer campaign relationships automatically.
+ 4. **Too little modern legit mail.** Aim for 40 or more of your own recent emails, including newsletters, receipts, notifications and mailing lists.
+ ### Suggested folder layout
+ 
+diff --git a/src/arer/cli.py b/src/arer/cli.py
+--- a/src/arer/cli.py
++++ b/src/arer/cli.py
+@@ -175,7 +175,7 @@
+ @click.option("--with-history-signals", is_flag=True,
+               help="Include history.* findings (off by default: they leak campaign siblings into a test).")
+ @click.option("--only", type=click.Choice(["all", "dev", "test"]), default="all", show_default=True,
+-              help="Use a stable 80/20 split: tune on dev, check on test.")
++              help="Use a stable 80/20 split; manifest group_id keeps known campaign samples together.")
+ @click.option("--skip-dir", "skip_dirs", multiple=True, help="Ignore any folder with this name (e.g. archive).")
+ @click.option("--details", is_flag=True, help="List every sample with its score.")
+ @click.option("--skip", multiple=True, help="Analyzer name to turn off, to see what it contributes.")
+@@ -193,7 +193,10 @@ def eval_cmd(root, from_history, with_history_signals, only, skip_dirs, details,
+         root = root or Path("data/samples")
+         if not root.is_dir():
+             raise click.ClickException(f"{root} does not exist (give a folder with phish/ and legit/, or use --from-history)")
+-        ev = evaluate(root, cfg, only=only, skip=set(skip), skip_dirs=set(skip_dirs), include_history=with_history_signals)
++        try:
++            ev = evaluate(root, cfg, only=only, skip=set(skip), skip_dirs=set(skip_dirs), include_history=with_history_signals)
++        except ValueError as e:
++            raise click.ClickException(safe_text(e, 240))
+     if not ev.results:
+ # placeholder
+ # placeholder
+diff --git a/src/arer/evaluate.py b/src/arer/evaluate.py
+--- a/src/arer/evaluate.py
++++ b/src/arer/evaluate.py
+@@ -2,22 +2,24 @@
+ evaluate.py - measure the detector on labeled samples, so tuning is evidence, not guessing.
+ 
+ Labels come from folders: anything under a folder named phish/phishing/malicious is phishing,
+-under legit/ham/benign/clean is legitimate. An optional <root>/labels.csv (columns: filename,label)
+-overrides the folder for single files, for example a sample you found to be mislabeled.
++under legit/ham/benign/clean is legitimate. An optional <root>/labels.csv supports exact relative
++paths and unambiguous filename overrides. An optional <root>/manifest.csv records known campaign
++groups and dataset provenance.
+ Reports, at each severity level and across a score sweep:
+   detection rate (phishing caught), false-alarm rate (legit flagged), precision,
+   the phishing you MISSED, the legit mail you FLAGGED, and which findings fire on which class.
+ 
+---only dev|test uses a stable 80/20 split (by file hash). Tune on dev, check on test now and
+-then, so your weights do not simply memorise your samples.
++--only dev|test uses a stable 80/20 split. Samples with the same manifest group_id stay together;
++other samples retain the content-hash split. Tune on dev, check on test now and then.
+ """
+ from __future__ import annotations
+ import csv
++import hashlib
+ import math
+ import statistics
+ from collections import Counter
+-from dataclasses import dataclass
+-from pathlib import Path
++from dataclasses import dataclass, field
++from pathlib import Path, PurePosixPath
+ 
+ from .config import Config
+ from .history.store import HistoryStore, logic_hash, rescore
+@@ -37,9 +39,17 @@ class Result:
+     label: str                 # "phish" | "legit"
+     verdict: Verdict
+     source: str = ""           # folder it came from, e.g. "legit/modern" or "legit/archive"
++    group_id: str = ""
++    dataset: str = ""
++    license: str = ""
++    reference: str = ""
++    collection_date: str = ""
++
+     @property
+     def split(self) -> str:
+-        sha = self.verdict.sha256
++        # Campaign siblings share one split; ungrouped samples keep the old content-hash split.
++        sha = (hashlib.sha256(self.group_id.encode("utf-8")).hexdigest()
++               if self.group_id else self.verdict.sha256)
+         return "test" if sha and int(sha[:8], 16) % 5 == 0 else "dev"
+ 
+ 
+@@ -50,10 +60,35 @@ class Evaluation:
+     unlabeled: int = 0
+     duplicates: int = 0
+     stale: int = 0              # history rows made by older analyzer logic or lists
++    warnings: list[str] = field(default_factory=list)
++
++
++@dataclass(frozen=True)
++class ManifestEntry:
++    group_id: str = ""
++    dataset: str = ""
++    license: str = ""
++    reference: str = ""
++    collection_date: str = ""
++
++
++def _safe_relative_path(raw: str, source: str, line: int) -> str:
++    """Validate a POSIX-style path from a dataset CSV before matching it to a file."""
++    value = raw.strip()
++    parts = value.split("/")
++    if (not value or "\\" in value or value.startswith("/")
++            or any(part in ("", ".", "..") for part in parts)
++            or (len(parts[0]) >= 2 and parts[0][1] == ":")):
++        raise ValueError(f"{source} row {line}: path must be a safe root-relative path")
++    return PurePosixPath(value).as_posix()
++
+ 
+ def _label_of(path: Path, root: Path, overrides: dict[str, str]) -> str | None:
+-    if path.name in overrides:
+-        return overrides[path.name]
++    rel = path.relative_to(root).as_posix()
++    if f"path:{rel}" in overrides:
++        return overrides[f"path:{rel}"]
++    if f"filename:{path.name}" in overrides:
++        return overrides[f"filename:{path.name}"]
+     for part in path.relative_to(root).parts[:-1]:
+         low = part.lower()
+         if low in PHISH_DIRS:
+@@ -62,15 +97,95 @@ def _label_of(path: Path, root: Path, overrides: dict[str, str]) -> str | None:
+             return "legit"
+     return None
+ 
+-def _read_overrides(root: Path) -> dict[str, str]:
++
++def _read_overrides(root: Path, files: list[Path] | None = None,
++                    warnings: list[str] | None = None) -> dict[str, str]:
++    """Read exact relative-path overrides and safe, unique legacy filename overrides."""
+     f = root / "labels.csv"
+     out: dict[str, str] = {}
+-    if f.is_file():
+-        with f.open(newline="", encoding="utf-8") as fh:
+-            for row in csv.DictReader(fh):
+-                lab = (row.get("label") or "").strip().lower()
+-                if row.get("filename") and lab in ("phish", "legit"):
+-                    out[row["filename"].strip()] = lab
++    if not f.is_file():
++        return out
++    warnings = warnings if warnings is not None else []
++    name_counts = Counter(p.name for p in (files or []))
++    available_paths = {p.relative_to(root).as_posix() for p in (files or [])}
++    with f.open(newline="", encoding="utf-8-sig") as fh:
++        reader = csv.DictReader(fh)
++        columns = set(reader.fieldnames or [])
++        if "label" not in columns or not columns.intersection({"path", "filename"}):
++            warnings.append("labels.csv needs a 'label' column and either 'path' or 'filename'")
++            return out
++        seen: set[str] = set()
++        conflicted: set[str] = set()
++        for line, row in enumerate(reader, start=2):
++            lab = (row.get("label") or "").strip().lower()
++            if lab not in ("phish", "legit"):
++                warnings.append(f"labels.csv row {line}: invalid label; override ignored")
++                continue
++            raw_path = (row.get("path") or "").strip()
++            raw_name = (row.get("filename") or "").strip()
++            if raw_path:
++                try:
++                    rel = _safe_relative_path(raw_path, "labels.csv", line)
++                except ValueError as exc:
++                    warnings.append(str(exc) + "; override ignored")
++                    continue
++                if files is not None and rel not in available_paths:
++                    warnings.append(f"labels.csv row {line}: path '{rel}' not found; override ignored")
++                    continue
++                key = f"path:{rel}"
++            elif raw_name:
++                if "/" in raw_name or "\\" in raw_name or raw_name in (".", ".."):
++                    warnings.append(f"labels.csv row {line}: filename must be a basename; use the path column")
++                    continue
++                if files is not None and name_counts.get(raw_name, 0) > 1:
++                    warnings.append(f"labels.csv row {line}: filename '{raw_name}' is ambiguous; use a relative path")
++                    continue
++                if files is not None and name_counts.get(raw_name, 0) == 0:
++                    warnings.append(f"labels.csv row {line}: filename '{raw_name}' not found; override ignored")
++                    continue
++                key = f"filename:{raw_name}"
++            else:
++                warnings.append(f"labels.csv row {line}: missing path/filename; override ignored")
++                continue
++            if key in conflicted:
++                continue
++            if key in seen:
++                out.pop(key, None)
++                conflicted.add(key)
++                warnings.append(f"labels.csv row {line}: duplicate target; all overrides for it are ignored")
++                continue
++            seen.add(key)
++            out[key] = lab
++    return out
++
++
++def _read_manifest(root: Path, files: list[Path]) -> dict[str, ManifestEntry]:
++    """Read optional campaign/provenance metadata; reject unsafe or unknown paths."""
++    f = root / "manifest.csv"
++    if not f.is_file():
++        return {}
++    available_paths = {p.relative_to(root).as_posix() for p in files}
++    out: dict[str, ManifestEntry] = {}
++    with f.open(newline="", encoding="utf-8-sig") as fh:
++        reader = csv.DictReader(fh)
++        if "path" not in (reader.fieldnames or []):
++            raise ValueError("manifest.csv needs a 'path' column")
++        for line, row in enumerate(reader, start=2):
++            raw_path = (row.get("path") or "").strip()
++            if not raw_path:
++                raise ValueError(f"manifest.csv row {line}: missing path")
++            rel = _safe_relative_path(raw_path, "manifest.csv", line)
++            if rel not in available_paths:
++                raise ValueError(f"manifest.csv row {line}: path '{rel}' does not match a mail sample under the dataset root")
++            if rel in out:
++                raise ValueError(f"manifest.csv row {line}: duplicate path '{rel}'")
++            out[rel] = ManifestEntry(
++                group_id=(row.get("group_id") or "").strip(),
++                dataset=(row.get("dataset") or "").strip(),
++                license=(row.get("license") or "").strip(),
++                reference=(row.get("reference") or "").strip(),
++                collection_date=(row.get("collection_date") or "").strip(),
++            )
+     return out
+ 
+ def evaluate_history(cfg: Config, only: str = "all", include_history: bool = False) -> Evaluation:
+@@ -98,11 +213,16 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
+     skip = set(skip or ())
+     if not include_history:
+         skip.add("history")        # your own history would leak campaign siblings into the test
+-    overrides = _read_overrides(root)
+     skip_dirs = {d.lower() for d in (skip_dirs or set())}
+-    files = sorted(p for p in root.rglob("*") if is_mail_candidate(p)
+-                   and not ({x.lower() for x in p.relative_to(root).parts[:-1]} & skip_dirs))
++    all_files = sorted(p for p in root.rglob("*") if is_mail_candidate(p))
+     ev = Evaluation([], [])
++    try:
++        overrides = _read_overrides(root, all_files, ev.warnings)
++        manifest = _read_manifest(root, all_files)
++    except (OSError, UnicodeError, csv.Error) as exc:
++        raise ValueError(f"could not read dataset metadata: {safe_text(exc, 160)}") from exc
++    files = [p for p in all_files
++             if not ({x.lower() for x in p.relative_to(root).parts[:-1]} & skip_dirs)]
+     seen: set[str] = set()
+     for p in files:
+         label = _label_of(p, root, overrides)
+@@ -119,9 +239,21 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
+             ev.duplicates += 1
+             continue
+         seen.add(verdict.sha256)
+-        r = Result(p, label, verdict, source="/".join(p.relative_to(root).parts[:-1]) or "(root)")
++        rel = p.relative_to(root).as_posix()
++        meta = manifest.get(rel, ManifestEntry())
++        r = Result(
++            p, label, verdict,
++            source="/".join(p.relative_to(root).parts[:-1]) or "(root)",
++            group_id=meta.group_id, dataset=meta.dataset, license=meta.license,
++            reference=meta.reference, collection_date=meta.collection_date,
++        )
+         if only == "all" or r.split == only:
+             ev.results.append(r)
++    ungrouped = sum(1 for r in ev.results if not r.group_id)
++    if manifest and ungrouped:
++        ev.warnings.append(
++            f"{ungrouped} evaluated sample(s) have no group_id and use the individual content-hash split"
++        )
+     return ev
+ # --------------------------------------------------------------------------- #
+ def _pct(n: int, d: int) -> str:
+@@ -166,6 +298,23 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
+         L.append("Need at least one phishing and one legitimate sample for meaningful rates.")
+     for e in ev.errors:
+         L.append(f"  could not load: {e}")
++    for warning in ev.warnings:
++        L.append(f"WARNING: {safe_text(warning, 240)}")
++    grouped = sum(1 for r in R if r.group_id)
++    if grouped:
++        L.append(f"Campaign grouping: {grouped}/{len(R)} evaluated samples have a manifest group_id")
++    provenance = sorted({(r.dataset, r.license, r.reference, r.collection_date)
++                         for r in R if any((r.dataset, r.license, r.reference, r.collection_date))})
++    if provenance:
++        L += ["", "Dataset provenance"]
++        for dataset, license_name, reference, collection_date in provenance:
++            details_text = "; ".join(
++                f"{name}: {safe_text(value, 120)}"
++                for name, value in (("license", license_name), ("reference", reference),
++                                    ("collected", collection_date)) if value
++            )
++            L.append(f"  {safe_text(dataset or '(dataset unspecified)', 60)}"
++                     + (f" — {details_text}" if details_text else ""))
+     # ---- by severity level -------------------------------------------------- #
+     L += ["", "Detection by level (flagged = this level or higher; [..] = 95% range given the sample size)",
+           f"  {'level':<20}{'phishing caught':>29}{'legit flagged':>28}{'precision':>11}"]
+diff --git a/tests/test_evaluate.py b/tests/test_evaluate.py
+--- a/tests/test_evaluate.py
++++ b/tests/test_evaluate.py
+@@ -1,5 +1,7 @@
+ from email.message import EmailMessage
+ 
++import pytest
++
+ from click.testing import CliRunner
+ 
+ from arer.cli import main
+@@ -86,3 +88,89 @@ def test_cli_skip_dir(tmp_path):
+     write(tmp_path / "legit" / "archive" / "old1.eml", "Sam <sam@example.org>", "old one", "hello old")
+     r = CliRunner().invoke(main, ["eval", str(tmp_path), "--skip-dir", "archive"])
+     assert r.exit_code == 0 and "2 phishing, 2 legitimate" in r.output
++
++
++def test_manifest_keeps_campaign_group_together_and_records_provenance(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_text(
++        "path,group_id,dataset,license,reference,collection_date\n"
++        "phish/p1.eml,campaign-7,Example Corpus,CC0,https://example.invalid/source,2026-01-01\n"
++        "phish/p2.eml,campaign-7,Example Corpus,CC0,https://example.invalid/source,2026-01-01\n",
++        encoding="utf-8",
++    )
++    ev = evaluate(tmp_path, cfg)
++    phish = [r for r in ev.results if r.label == "phish"]
++    assert len(phish) == 2
++    assert phish[0].split == phish[1].split
++    assert all(r.dataset == "Example Corpus" and r.license == "CC0" for r in phish)
++    out = render(ev, cfg)
++    assert "Campaign grouping: 2/4" in out and "Example Corpus" in out
++
++
++def test_manifest_rejects_unknown_sample_path(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_text("path,group_id\nphish/missing.eml,campaign-1\n")
++    with pytest.raises(ValueError, match="does not match a mail sample"):
++        evaluate(tmp_path, cfg)
++
++
++def test_manifest_rejects_duplicate_paths(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_text(
++        "path,group_id\nphish/p1.eml,campaign-1\nphish/p1.eml,campaign-2\n"
++    )
++    with pytest.raises(ValueError, match="duplicate path"):
++        evaluate(tmp_path, cfg)
++
++
++def test_manifest_rejects_path_traversal(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_text("path,group_id\n../outside.eml,campaign-1\n")
++    with pytest.raises(ValueError, match="safe root-relative path"):
++        evaluate(tmp_path, cfg)
++
++
++def test_manifest_rejects_unreadable_encoding(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_bytes(b"path,group_id\n\xff,campaign-1\n")
++    with pytest.raises(ValueError, match="could not read dataset metadata"):
++        evaluate(tmp_path, cfg)
++
++
++def test_relative_path_label_override_disambiguates_duplicate_names(tmp_path):
++    write(tmp_path / "phish" / "same.eml", "A <a@bad.example>", "phish sample", "bad")
++    write(tmp_path / "legit" / "same.eml", "B <b@good.example>", "legit sample", "good")
++    (tmp_path / "labels.csv").write_text("path,label\nlegit/same.eml,phish\n")
++    ev = evaluate(tmp_path, cfg)
++    labels = {r.path.relative_to(tmp_path).as_posix(): r.label for r in ev.results}
++    assert labels["phish/same.eml"] == "phish"
++    assert labels["legit/same.eml"] == "phish"
++
++
++def test_ambiguous_filename_override_is_ignored_with_warning(tmp_path):
++    write(tmp_path / "phish" / "same.eml", "A <a@bad.example>", "phish sample", "bad")
++    write(tmp_path / "legit" / "same.eml", "B <b@good.example>", "legit sample", "good")
++    (tmp_path / "labels.csv").write_text("filename,label\nsame.eml,phish\n")
++    ev = evaluate(tmp_path, cfg)
++    labels = {r.path.relative_to(tmp_path).as_posix(): r.label for r in ev.results}
++    assert labels == {"phish/same.eml": "phish", "legit/same.eml": "legit"}
++    assert any("ambiguous" in warning for warning in ev.warnings)
++
++
++def test_conflicting_duplicate_path_overrides_are_all_ignored(tmp_path):
++    build(tmp_path)
++    (tmp_path / "labels.csv").write_text(
++        "path,label\nphish/p2.eml,phish\nphish/p2.eml,legit\n"
++    )
++    ev = evaluate(tmp_path, cfg)
++    p2 = next(r for r in ev.results if r.path.name == "p2.eml")
++    assert p2.label == "phish"
++    assert any("duplicate target" in warning for warning in ev.warnings)
++
++
++def test_cli_reports_invalid_manifest_cleanly(tmp_path):
++    build(tmp_path)
++    (tmp_path / "manifest.csv").write_text("group_id\ncampaign-1\n")
++    result = CliRunner().invoke(main, ["eval", str(tmp_path)])
++    assert result.exit_code == 1
++    assert "manifest.csv needs a 'path' column" in result.output
