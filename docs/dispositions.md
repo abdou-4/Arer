@@ -94,3 +94,28 @@ Same discipline as the alert reader (6.1b), frozen by
 Library use: `read_disposition(alert_path)` (`None` when absent,
 `DispositionError` when unreadable), `load_disposition(path)` for a bare file,
 `build_disposition(...)` + `write_disposition(d, alert_path)` to write one.
+
+## Provenance and training eligibility (R2)
+
+A sidecar records WHAT was decided; the history database records WHERE THE
+DECISION CAME FROM. Every `alerts set` / `alerts set-group` decision is
+mirrored into `data/history.db` as an append-only decision event with
+provenance (`analyst` + local analyst id), a timestamp and an explicit
+training-eligibility flag:
+
+| sidecar status | case disposition | training eligible |
+|---|---|---|
+| `phishing` | `true_positive` | yes (analyst decision) |
+| `benign` | `false_positive` | yes (analyst decision) |
+| `acknowledged` | workflow state only | never |
+
+Rules:
+
+- the decision API needs schema 2; `arer history migrate` upgrades the
+  database (verified backup first, one transaction, idempotent);
+- sidecars imported from before the remediation
+  (`arer history import-dispositions QUEUE_DIR`) carry provenance
+  `legacy_unverified`: they are preserved verbatim but are NEVER
+  training-eligible until an analyst re-decides them;
+- tool verdicts and unreviewed alerts can never become training labels
+  ("only human labels teach the tool").

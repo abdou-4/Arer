@@ -250,7 +250,9 @@ def label_flow() -> None:
 @register_action("My history", "Saved scans, statistics, import")
 def history_flow() -> None:
     what = ask_choice("History:", [("list", "Show recent saved scans"), ("stats", "Show statistics"),
-                                    ("import", "Import a folder of labeled samples"), ("forget", "Delete one saved scan")])
+                                    ("import", "Import a folder of labeled samples"), ("forget", "Delete one saved scan"),
+                                    ("migrate", "Upgrade the database to schema 2 (backup first, provenance)"),
+                                    ("import-dispositions", "Import my alert-queue decisions (as legacy, review to trust)")])
     if what is None:
         return
     if what == "list":
@@ -265,6 +267,13 @@ def history_flow() -> None:
         root = ask_path("Folder that contains phish/ and legit/", want="folder")
         if root is not None:
             run_cli(["history", "import", str(root)])
+    elif what == "migrate":
+        dry = click.confirm("  Show what would happen first (dry run)?", default=True)
+        run_cli(["history", "migrate"] + (["--dry-run"] if dry else []))
+    elif what == "import-dispositions":
+        queue = ask_path("Folder with the alert records (the scan --alerts folder)", want="folder")
+        if queue is not None:
+            run_cli(["history", "import-dispositions", str(queue)])
     else:
         sha = click.prompt(f"  ID of the scan to delete {dim('(q = back)')}", default="", show_default=False).strip()
         if sha and sha.lower() not in ("q", "back"):
@@ -280,7 +289,8 @@ def alerts_flow() -> None:
         ("export", "Export for a SIEM / SOAR or spreadsheet"),
         ("campaigns", "Show campaigns - one row per distinct mail  (exact sha256)"),
         ("set-group", "Record one decision for every alert of the same mail"),
-        ("stats", "Queue metrics - backlog, false alarms, response time")])
+        ("stats", "Queue metrics - backlog, false alarms, response time"),
+        ("cases", "Case queue - one row per mail, ranked by severity (work top-down)")])
     if what is None:
         return
     folder = ask_path("Folder with the alert records  (the folder you gave scan --alerts)", want="folder")
@@ -332,6 +342,8 @@ def alerts_flow() -> None:
         run_cli(["alerts", "campaigns", str(folder)] + (["--status", status] if status != "all" else []))
     elif what == "stats":
         run_cli(["alerts", "stats", str(folder)])
+    elif what == "cases":
+        run_cli(["alerts", "cases", str(folder)])
     else:
         sha = click.prompt(f"  sha256 of the mail, from the campaigns list (6 or more characters) {dim('(q = back)')}",
                            default="", show_default=False).strip()
@@ -389,10 +401,12 @@ def help_flow() -> None:
     arer eval [FOLDER]             measure accuracy on labeled samples
     arer label FILE phish|legit    teach arer from your own decision
     arer history list|stats|import|forget
-    arer alerts list|campaigns|show DIR    read the alert queue (records, campaigns)
+    arer alerts list|campaigns|cases|show DIR    read the queue (records, campaigns, the case work order)
     arer alerts set|set-group DIR ID STATUS        record decisions (one alert, or one whole mail)
     arer alerts stats DIR                  queue metrics (backlog, false alarms, response time)
     arer alerts export DIR                 export the queue for a SIEM / SOAR
+    arer history migrate [--dry-run]       upgrade data/history.db (backup first, provenance)
+    arer history import-dispositions DIR   import queue decisions as legacy_unverified
     arer watch DROPDIR [--once]            scan every mail that lands in a folder
     arer feeds status|update       local blocklists (update needs internet)
     arer parse PATH                convert emails to JSON

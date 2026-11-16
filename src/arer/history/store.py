@@ -10,6 +10,20 @@ instantly. A row remembers which analyzer logic and lists produced it (logic_has
 flagged as stale rather than silently trusted.
 
 Only labels you set teach the tool. It never learns from its own verdicts, so a wrong guess cannot reinforce itself.
+
+Schema 2 (R2 remediation) adds the provenance model without touching any v1
+column or row:
+
+- `cases`            one open case per SHA-256 (workflow state new/triaged/closed);
+- `case_decisions`   APPEND-ONLY decision events with provenance (analyst /
+                      import / tool / legacy_unverified), analyst identity,
+                      source reference, note, timestamp and an explicit
+                      training-eligibility flag + reason;
+- `schema_migrations` which migration ran, when.
+
+A schema-1 database keeps working read/write exactly as before; the decision
+API refuses it with MigrationRequired until `arer history migrate` has run
+(backup first, transactional, idempotent - see migrate()).
 """
 from __future__ import annotations
 
@@ -25,8 +39,20 @@ from ..config import Config
 from ..models import Category, Email, Finding, Level, Verdict
 from ..scoring import compute
 
-SCHEMA = "1"
+SCHEMA = "2"                       # version NEW databases are created with
+KNOWN_SCHEMAS = ("1", "2")         # v1 databases stay fully readable/writable
 LABELS = ("phish", "legit")
+
+# R2 vocabulary (the roadmap's case model; sidecar statuses map onto it)
+CASE_STATES = ("new", "triaged", "closed")
+PROVENANCES = ("analyst", "import", "tool", "legacy_unverified")
+# queue sidecar status -> case disposition value
+STATUS_TO_DISPOSITION = {"phishing": "true_positive", "benign": "false_positive",
+                         "acknowledged": "acknowledged"}
+
+
+class MigrationRequired(RuntimeError):
+    """The decision/provenance API needs schema 2; run `arer history migrate`."""
 
 
 def now_iso() -> str:
@@ -64,6 +90,26 @@ class Row:
 
 
 _COLS = "sha256,name,first_seen,last_seen,times,from_domain,level,score,partial,logic_hash,label,label_at,note"
+
+_V2_DDL = """
+CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cases(
+    sha256 TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'new',
+    first_seen TEXT, last_seen TEXT, campaign_id TEXT);
+CREATE TABLE IF NOT EXISTS case_decisions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_sha256 TEXT NOT NULL,
+    kind TEXT NOT NULL,               -- disposition | label | campaign
+    value TEXT NOT NULL,              -- true_positive / false_positive / acknowledged / phish / legit / campaign id
+    provenance TEXT NOT NULL,         -- analyst | import | tool | legacy_unverified
+    analyst TEXT,                     -- who, for analyst-originated decisions
+    source_ref TEXT,                  -- record file / dataset id / command
+    note TEXT,
+    created_at TEXT NOT NULL,
+    training_eligible INTEGER NOT NULL DEFAULT 0,
+    eligibility_reason TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_decisions_case ON case_decisions(case_sha256, id);
+"""
 
 
 def _row(r) -> Row:
@@ -104,19 +150,34 @@ class HistoryStore:
                     sha256 TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(sha256, kind, value));
                 CREATE INDEX IF NOT EXISTS ind_lookup ON indicators(kind, value);
             """)
-            conn.execute("INSERT OR IGNORE INTO meta VALUES('schema', ?)", (SCHEMA,))
+            existing = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+            if existing is None:
+                # brand-new database: straight to schema 2 (v1 tables + provenance tables)
+                conn.executescript(_V2_DDL)
+                conn.execute("INSERT OR IGNORE INTO meta VALUES('schema', ?)", (SCHEMA,))
+                conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES('1', ?)", (now_iso(),))
+                conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES('2', ?)", (now_iso(),))
+            elif existing[0] == "1":
+                # a schema-1 database: keep it EXACTLY as it is (explicit migration only)
+                pass
+            elif existing[0] == SCHEMA:
+                conn.executescript(_V2_DDL)      # make sure the v2 tables exist
             conn.commit()
-            return cls(conn)
+            store = cls(conn)
+            store.schema_version = existing[0] if existing else SCHEMA
+            return store
         if not path.is_file():
             return None
         try:
             uri = f"file:{quote(str(path))}?mode={'ro' if readonly else 'rw'}"
             conn = sqlite3.connect(uri, uri=True)
             row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-            if not row or row[0] != SCHEMA:
+            if not row or row[0] not in KNOWN_SCHEMAS:
                 conn.close()
                 return None
-            return cls(conn)
+            store = cls(conn)
+            store.schema_version = row[0]
+            return store
         except sqlite3.DatabaseError:
             return None
 
@@ -183,6 +244,106 @@ class HistoryStore:
             cur = self.conn.execute("DELETE FROM scans WHERE sha256=?", (sha,))
         return cur.rowcount == 1
 
+
+    # ---- R2: provenance / decision model (schema 2 only) ---------------------- #
+    def _need_v2(self) -> None:
+        if getattr(self, "schema_version", KNOWN_SCHEMAS[0]) != "2":
+            raise MigrationRequired(
+                "this history database is still schema 1 - decisions and provenance "
+                "need schema 2. Back it up and migrate first:  arer history migrate")
+
+    def record_decision(self, case_sha256: str, *, kind: str, value: str, provenance: str,
+                        analyst: str = "", source_ref: str = "", note: str = "",
+                        created_at: str | None = None, training_eligible: bool = False,
+                        eligibility_reason: str = "") -> int:
+        """Append ONE decision event. Append-only: nothing is ever updated or
+        deleted; the current decision of a case is its highest id."""
+        if kind not in ("disposition", "label", "campaign"):
+            raise ValueError(f"unknown decision kind '{kind}'")
+        if provenance not in PROVENANCES:
+            raise ValueError(f"unknown provenance '{provenance}' (use one of: {', '.join(PROVENANCES)})")
+        self._need_v2()
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO case_decisions(case_sha256,kind,value,provenance,analyst,source_ref,note,"
+                "created_at,training_eligible,eligibility_reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (case_sha256, kind, value, provenance, analyst, source_ref, note,
+                 created_at or now_iso(), int(training_eligible), eligibility_reason))
+            self.conn.execute(
+                "INSERT INTO cases(sha256,state,first_seen,last_seen) VALUES(?,?,?,?) "
+                "ON CONFLICT(sha256) DO NOTHING", (case_sha256, "new", created_at or now_iso(), created_at or now_iso()))
+        return int(cur.lastrowid)
+
+    def current_decision(self, case_sha256: str, kind: str | None = None) -> dict | None:
+        """The latest accepted decision event of a case (optionally of one kind)."""
+        self._need_v2()
+        q = ("SELECT id,case_sha256,kind,value,provenance,analyst,source_ref,note,created_at,"
+             "training_eligible,eligibility_reason FROM case_decisions WHERE case_sha256=?")
+        args: list = [case_sha256]
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        row = self.conn.execute(q + " ORDER BY id DESC LIMIT 1", args).fetchone()
+        if not row:
+            return None
+        keys = ("id", "case_sha256", "kind", "value", "provenance", "analyst", "source_ref",
+                "note", "created_at", "training_eligible", "eligibility_reason")
+        return dict(zip(keys, row))
+
+    def decisions_of(self, case_sha256: str) -> list[dict]:
+        """Every decision event of a case, oldest first (the audit trail)."""
+        self._need_v2()
+        rows = self.conn.execute(
+            "SELECT id,case_sha256,kind,value,provenance,analyst,source_ref,note,created_at,"
+            "training_eligible,eligibility_reason FROM case_decisions WHERE case_sha256=? ORDER BY id",
+            (case_sha256,)).fetchall()
+        keys = ("id", "case_sha256", "kind", "value", "provenance", "analyst", "source_ref",
+                "note", "created_at", "training_eligible", "eligibility_reason")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def training_decisions(self) -> list[dict]:
+        """Decision events eligible to teach a model, with the reason recorded.
+
+        The hard invariant (R2.2 / docs/ROADMAP.md): only ANALYST decisions
+        (and verified imports) can be eligible. tool decisions, unreviewed
+        verdicts, workflow acknowledgements and legacy_unverified rows are
+        excluded - the flag is computed at write time and re-checked here, so
+        a legacy row can never sneak in."""
+        self._need_v2()
+        rows = self.conn.execute(
+            "SELECT id,case_sha256,kind,value,provenance,analyst,source_ref,note,created_at,"
+            "training_eligible,eligibility_reason FROM case_decisions "
+            "WHERE training_eligible=1 AND provenance IN ('analyst','import') ORDER BY id").fetchall()
+        keys = ("id", "case_sha256", "kind", "value", "provenance", "analyst", "source_ref",
+                "note", "created_at", "training_eligible", "eligibility_reason")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def import_sidecar_decision(self, case_sha256: str, *, alert_id: str, status: str,
+                                note: str, set_utc: str, source_ref: str) -> str:
+        """Import one validated disposition sidecar as `legacy_unverified` (R2.4).
+
+        Returns 'imported' or 'duplicate'. The original literal status and
+        timestamp are preserved; the sidecar's mapped disposition is NEVER
+        treated as an analyst-confirmed label."""
+        self._need_v2()
+        value = STATUS_TO_DISPOSITION[status]
+        dup = self.conn.execute(
+            "SELECT 1 FROM case_decisions WHERE case_sha256=? AND source_ref=? AND created_at=? "
+            "AND value=? AND provenance='legacy_unverified' LIMIT 1",
+            (case_sha256, source_ref, set_utc, value)).fetchone()
+        if dup:
+            return "duplicate"
+        reason = {"true_positive": "legacy sidecar 'phishing' without recorded provenance - review before training",
+                  "false_positive": "legacy sidecar 'benign' without recorded provenance - review before training",
+                  "acknowledged": "workflow acknowledgement, never a training disposition"}.get(
+                      value, "legacy sidecar without recorded provenance")
+        self.record_decision(case_sha256, kind="disposition", value=value,
+                             provenance="legacy_unverified", source_ref=source_ref,
+                             note=note, created_at=set_utc, training_eligible=False,
+                             eligibility_reason=reason)
+        return "imported"
+
+
     # ---- reading ------------------------------------------------------------ #
     def get(self, sha: str) -> Row | None:
         r = self.conn.execute(f"SELECT {_COLS} FROM scans WHERE sha256=?", (sha,)).fetchone()
@@ -227,6 +388,120 @@ class HistoryStore:
 
     def labeled(self) -> list[Row]:
         return [_row(r) for r in self.conn.execute(f"SELECT {_COLS} FROM scans WHERE label IS NOT NULL ORDER BY sha256").fetchall()]
+
+
+def _counts(conn: sqlite3.Connection) -> dict[str, int]:
+    q = lambda s: conn.execute(s).fetchone()[0]           # noqa: E731
+    return {"scans": q("SELECT COUNT(*) FROM scans"), "findings": q("SELECT COUNT(*) FROM findings"),
+            "indicators": q("SELECT COUNT(*) FROM indicators"),
+            "labels": q("SELECT COUNT(*) FROM scans WHERE label IS NOT NULL")}
+
+
+def read_schema_version(path: Path) -> str | None:
+    """The meta schema value of a history database file, or None."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return None
+
+
+def migrate(path: Path, *, dry_run: bool = False, backup: bool = True) -> dict:
+    """Migrate a history database from schema 1 to schema 2 (R2.3).
+
+    Safety contract:
+    - a verified backup (SQLite backup API) is made FIRST and its row counts
+      are checked against the source; the original file is untouched until
+      the migration transaction has fully succeeded;
+    - the migration runs in ONE transaction: any error rolls everything back
+      and the original database is unchanged;
+    - every scan row, finding, indicator, label, label_at and note is
+      preserved; existing phish/legit labels become decision events with
+      provenance `legacy_unverified` (never silently analyst-confirmed);
+    - running it on a schema-2 database is a no-op (idempotent);
+    - dry_run reports what WOULD happen and writes nothing.
+
+    Never migrate the user's real database without their own backup strategy;
+    this function still makes its own verified backup copy first.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"no history database at {path}")
+    version = read_schema_version(path)
+    if version == "2":
+        return {"changed": False, "message": "already schema 2 - nothing to do"}
+    if version != "1":
+        raise MigrationRequired(f"unsupported schema version '{version}' at {path}")
+
+    src = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+    before = _counts(src)
+    if dry_run:
+        src.close()
+        return {"changed": False, "dry_run": True, "before": before,
+                "message": (f"would back up {path} and migrate schema 1 -> 2: "
+                            f"{before['scans']} scans ({before['labels']} labeled), "
+                            f"{before['findings']} findings, {before['indicators']} indicators; "
+                            f"{before['labels']} labeled rows would become legacy_unverified decision events")}
+
+    backup_path = None
+    if backup:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = path.with_name(f"{path.name}.pre-migration-{stamp}.db")
+        dst = sqlite3.connect(str(backup_path))
+        src.backup(dst)                                   # SQLite backup API: safe with WAL
+        dst.commit()
+        after_backup = _counts(dst)
+        dst.close()
+        if after_backup != before:
+            src.close()
+            backup_path.unlink(missing_ok=True)
+            raise RuntimeError("backup verification failed - migration aborted, original untouched")
+
+    conn = sqlite3.connect(str(path), isolation_level=None)  # explicit transaction control
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for stmt in _V2_DDL.split(";"):                    # executescript would COMMIT mid-migration
+            if stmt.strip():
+                conn.execute(stmt)
+        now = now_iso()
+        rows = conn.execute(f"SELECT sha256, first_seen, last_seen FROM scans").fetchall()
+        conn.executemany("INSERT INTO cases(sha256,state,first_seen,last_seen) VALUES(?,?,?,?) "
+                         "ON CONFLICT(sha256) DO NOTHING",
+                         [(sha, "new", fs, ls) for sha, fs, ls in rows])
+        labeled = conn.execute("SELECT sha256, label, label_at, note FROM scans WHERE label IS NOT NULL").fetchall()
+        for sha, label, label_at, note in labeled:
+            conn.execute(
+                "INSERT INTO case_decisions(case_sha256,kind,value,provenance,analyst,source_ref,note,"
+                "created_at,training_eligible,eligibility_reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (sha, "label", label, "legacy_unverified", "", "schema-1 scans.label", note or "",
+                 label_at or now, 0, "legacy label migrated from schema 1 with no recorded provenance - "
+                 "review before it may teach a model"))
+        conn.execute("UPDATE meta SET value='2' WHERE key='schema'")
+        conn.execute("INSERT OR REPLACE INTO schema_migrations VALUES('2', ?)", (now,))
+        after = _counts(conn)
+        if after != before:
+            raise RuntimeError(f"post-migration check failed: {before} -> {after}")
+        conn.execute("COMMIT")
+    except BaseException:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        conn.close()
+        src.close()
+        raise                                             # original database untouched
+    conn.close()
+    src.close()
+    return {"changed": True, "before": before, "after": after,
+            "migrated_labels": len(labeled), "backup": str(backup_path) if backup_path else None,
+            "message": f"migrated schema 1 -> 2 ({before['scans']} scans, {len(labeled)} labels preserved as legacy_unverified)"}
 
 
 def rescore(store: HistoryStore, row: Row, cfg: Config, drop_prefixes: tuple[str, ...] = ()) -> Verdict:

@@ -31,11 +31,12 @@ from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alerts,
                     to_json as alert_to_json, write_alert)
 from .campaign import build_campaigns, campaign_level, campaign_status
-from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
+from .disposition import STATUSES, build_disposition, disposition_path, read_disposition, write_disposition
 from .export import export_row, render as render_export
 from .metrics import queue_stats, render_queue_stats
 from .history.indicators import extract_indicators
-from .history.store import HistoryStore, logic_hash
+from .history.store import (HistoryStore, MigrationRequired, STATUS_TO_DISPOSITION, logic_hash,
+                            migrate as migrate_history, read_schema_version)
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
 from .models import Level
 from .pipeline import run_pipeline
@@ -121,6 +122,46 @@ def parse(input, output, recursive, trust, include_payload, extract_attachments,
 
     click.echo(f"done: {len(files) - failures}/{len(files)} parsed")
     sys.exit(1 if failures else 0)
+
+
+def _mirror_decision(alerts_dir: Path, alert, status: str, note: str, config_dir=None) -> str:
+    """Mirror one analyst disposition into the history database (R2).
+
+    The sidecar stays the queue's local record; the decision event in
+    history.db carries the provenance (analyst identity, timestamp,
+    training eligibility). Best-effort: if the database is missing or still
+    schema 1, the disposition still works and the caller prints a hint - a
+    sidecar decision is NEVER lost because of the provenance layer.
+    """
+    import getpass
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError:
+        return ""
+    try:
+        store = HistoryStore.open(cfg.history.db_path, create=True)
+        if store is None:
+            return ""
+        try:
+            if status == "phishing":
+                eligible, reason = True, "analyst true_positive"
+            elif status == "benign":
+                eligible, reason = True, "analyst false_positive"
+            else:
+                eligible, reason = False, "workflow acknowledgement, never a training disposition"
+            store.record_decision(
+                alert.verdict.sha256, kind="disposition", value=STATUS_TO_DISPOSITION[status],
+                provenance="analyst", analyst=getpass.getuser(),
+                source_ref=f"alert:{alert.alert_id} (beside {alerts_dir})",
+                note=note, training_eligible=eligible, eligibility_reason=reason)
+            return ""
+        finally:
+            store.close()
+    except MigrationRequired:
+        return ("note: the decision is stored as a sidecar only - analyst provenance and "
+                "training eligibility need schema 2:  arer history migrate")
+    except Exception as e:                              # noqa: BLE001 - mirroring must never break triage
+        return f"note: decision not mirrored to history ({safe_text(e, 120)})"
 
 
 def _save(cfg, email, verdict, name) -> int:
@@ -296,7 +337,9 @@ def alerts_show(directory, alert_id):
 @click.argument("alert_id")
 @click.argument("status", type=click.Choice(STATUSES))
 @click.option("--note", help="Why (the analyst's words, stored verbatim).")
-def alerts_set(directory, alert_id, status, note):
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
+              help="Config folder (for the history database the decision is mirrored into).")
+def alerts_set(directory, alert_id, status, note, config_dir):
     """Record the decision about one alert: acknowledged, benign or phishing.
 
     Writes <name>.disposition.json next to the alert record; the record itself
@@ -311,6 +354,9 @@ def alerts_set(directory, alert_id, status, note):
     out = write_disposition(d, m.path)
     click.echo(f"{m.alert.alert_id[:12]}  {safe_text(m.alert.source_file, 50)}  disposition: {status}"
                + (f"  ({safe_text(note, 120)})" if note else "") + f"\n  -> {safe_text(out.name, 80)}")
+    hint = _mirror_decision(directory, m.alert, status, note or "", config_dir)
+    if hint:
+        click.echo(click.style(hint, fg="yellow"))
 
 
 @alerts.command("export")
@@ -419,7 +465,9 @@ def alerts_campaigns(directory, level, status):
 @click.argument("sha256")
 @click.argument("status", type=click.Choice(STATUSES))
 @click.option("--note", help="Why (the analyst's words, stored verbatim).")
-def alerts_set_group(directory, sha256, status, note):
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
+              help="Config folder (for the history database the decision is mirrored into).")
+def alerts_set_group(directory, sha256, status, note, config_dir):
     """Record one decision for every alert record of the same mail.
 
     SHA256 is 6 or more hex characters of the mail's hash (copy it from
@@ -434,8 +482,57 @@ def alerts_set_group(directory, sha256, status, note):
     c = matches[0]
     for a, p in zip(c.alerts, c.paths):
         write_disposition(build_disposition(a.alert_id, status, mail_sha256=c.mail_sha256, note=note or ""), p)
+        _mirror_decision(directory, a, status, note or "", config_dir)
     click.echo(f"{c.mail_sha256[:12]}  {len(c.alerts)} alert(s) marked {status}"
                + (f"  ({safe_text(note, 120)})" if note else ""))
+
+
+@alerts.command("cases")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def alerts_cases(directory):
+    """The CASE queue (R2.5): one row per distinct mail (exact sha256,
+    deduplicated across file names and sightings), ranked by verdict
+    severity first and score second - the work order an analyst triages
+    top-down. Read-only; broken records or sidecars are named, excluded
+    from the ranking, and make the command exit 1."""
+    reads = read_alerts(directory)
+    bad = 0
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+    rows = []
+    for c in build_campaigns(reads):
+        members = []
+        for a, p in zip(c.alerts, c.paths):
+            try:
+                d = read_disposition(p, a)
+            except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+                bad += 1
+                click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+                continue
+            members.append((a, d))
+        if not members:
+            continue
+        lvl = campaign_level([a for a, _ in members])
+        score = max(a.verdict.score for a, _ in members)
+        rows.append((-lvl.rank, -score, members[0][0].generated_utc, c.mail_sha256,
+                     len(members), lvl, score,
+                     min(m[0].generated_utc for m in members),
+                     max(m[0].generated_utc for m in members),
+                     campaign_status([d.status if d else "new" for _, d in members])))
+    rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))    # severity desc, score desc, oldest, sha
+    if rows:
+        click.echo(f"{'sha256':<14}{'seen':>5}  {'level':<18}{'score':>5}  "
+                   f"{'first':<21}{'last':<21}status")
+        for _, _, _, sha, seen, lvl, score, first, last, st in rows:
+            click.echo(f"{sha[:12]:<14}{seen:>5}  {lvl.value:<18}{score:>5}  "
+                       f"{first:<21}{last:<21}{st}")
+    elif not bad:
+        click.echo(f"no alert records in {directory}")
+    if bad:
+        click.echo(f"{len(rows)} case(s), {bad} unreadable")
+    sys.exit(1 if bad else 0)
 
 
 @alerts.command("stats")
@@ -633,13 +730,99 @@ def history_stats(config_dir):
     finally:
         store.close()
     db = cfg.history.db_path
-    click.echo(f"history: {db}  ({db.stat().st_size / 1e3:.0f} KB)")
+    click.echo(f"history: {db}  ({db.stat().st_size / 1e3:.0f} KB)  schema {store.schema_version}")
+    if store.schema_version == "1":
+        click.echo(click.style("schema 1: analyst provenance and training eligibility are unavailable "
+                               "until you run: arer history migrate", fg="yellow"))
     click.echo(f"scans: {s['total']}   labeled phish: {s['phish']}   labeled legit: {s['legit']}   unlabeled: {s['unlabeled']}")
     click.echo(f"from {s['oldest'] or '-'}  to {s['newest'] or '-'}")
     need = cfg.history.min_scans
     click.echo(f"first-time-sender signal: {'active' if s['total'] >= need else f'silent until {need} scans are saved (cold start)'}")
     if s["stale"]:
         click.echo(click.style(f"{s['stale']} scans were made by older analyzer logic or word lists (stored findings may miss new rules).", fg="yellow"))
+
+
+@history.command("migrate")
+@click.option("--dry-run", is_flag=True, help="Report what would happen; write nothing.")
+@click.option("--no-backup", is_flag=True, help="Skip the verified backup copy (NOT recommended).")
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False))
+def history_migrate(dry_run, no_backup, config_dir):
+    """Migrate data/history.db from schema 1 to schema 2 (decisions,
+    provenance, cases). Makes a verified backup copy first, runs in one
+    transaction, preserves every scan/finding/indicator/label, and is
+    idempotent. Your original file is never touched until the migration
+    fully succeeds; keep the backup until you have verified the result."""
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError as e:
+        raise click.ClickException(str(e))
+    db = cfg.history.db_path
+    version = read_schema_version(db)
+    if not db.is_file():
+        raise click.ClickException(f"no history database at {db} (nothing to migrate)")
+    if version not in ("1", "2"):
+        raise click.ClickException(f"{db} has unsupported schema '{version}' - refusing to touch it")
+    try:
+        report = migrate_history(db, dry_run=dry_run, backup=not no_backup)
+    except Exception as e:                              # noqa: BLE001 - migration errors must be loud
+        raise click.ClickException(f"migration aborted, the original database is unchanged: {safe_text(e, 200)}") from e
+    if report.get("dry_run"):
+        click.echo(f"DRY RUN - {report['message']}")
+        return
+    click.echo(report["message"])
+    if report.get("backup"):
+        click.echo(f"backup: {report['backup']}\n"
+                   "keep it until you have verified the migrated database "
+                   "(rollback = stop arer and copy the backup back over data/history.db)")
+    if report.get("changed"):
+        click.echo("next: arer history import-dispositions QUEUE_DIR   (import your existing alert sidecars)")
+
+
+@history.command("import-dispositions")
+@click.argument("queue", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False))
+def history_import_dispositions(queue, config_dir):
+    """Import validated disposition sidecars from QUEUE into history.db as
+    `legacy_unverified` decision events (R2.4). A legacy sidecar is NEVER
+    treated as an analyst-confirmed training label; review it (re-decide
+    with `alerts set`) to make it eligible. Corrupt or mismatched sidecars
+    are named and counted, never applied."""
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError as e:
+        raise click.ClickException(str(e))
+    store = HistoryStore.open(cfg.history.db_path, create=False)
+    if store is None:
+        raise click.ClickException(f"no history database at {cfg.history.db_path} (create one with a labeled scan)")
+    counts = {"imported": 0, "duplicate": 0, "skipped_new": 0, "unreadable": 0}
+    try:
+        try:
+            for r in read_alerts(queue):
+                if r.alert is None:
+                    counts["unreadable"] += 1
+                    click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+                    continue
+                try:
+                    d = read_disposition(r.path, r.alert)
+                except Exception as e:                       # noqa: BLE001 - integrity errors are named
+                    counts["unreadable"] += 1
+                    click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+                    continue
+                if d is None:
+                    counts["skipped_new"] += 1
+                    continue
+                result = store.import_sidecar_decision(
+                    r.alert.verdict.sha256, alert_id=r.alert.alert_id, status=d.status,
+                    note=d.note, set_utc=d.set_utc, source_ref=r.path.name)
+                counts[result] += 1
+        except MigrationRequired as e:
+            raise click.ClickException(safe_text(e, 240)) from e
+    finally:
+        store.close()
+    click.echo(f"sidecars: {counts['imported']} imported, {counts['duplicate']} already imported "
+               f"(duplicate), {counts['skipped_new']} without a decision, {counts['unreadable']} unreadable "
+               "- all imported decisions carry provenance legacy_unverified")
+    sys.exit(1 if counts["unreadable"] else 0)
 
 
 @history.command("import")
