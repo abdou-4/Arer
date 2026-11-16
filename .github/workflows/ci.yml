@@ -43,7 +43,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        # astral-sh/setup-uv v10.3.3, pinned by SHA. NOTE: this action does not
+        # publish floating major tags (v10 does not exist), only vX.Y.Z tags.
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
 
       - name: Sync dependencies against the selected interpreter
         run: uv sync --frozen --python "$(command -v python3.13)"
