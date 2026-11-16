@@ -21,9 +21,9 @@ Arer is a local-first phishing email triage engine that analyzes `.eml`, `.msg`,
 - **Explainable by construction.** Every point in a verdict traces back to a named finding with its evidence. Weights, caps, thresholds and word lists live in config files, not code.
 - **Offline blocklists.** About 1.2 million phishing domains and URLs from public feeds, held in a 27 MB hash index. Lookups take microseconds and add no measurable scan time.
 - **A private, labeled history.** Label an email once and later mail from the same sender, links or attachments is judged by what you decided. Only *your* labels teach it.
-- **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, an 80/20 dev/test split, and which findings help or hurt.
+- **A measurement harness.** `arer eval` reports detection and false alarms with confidence ranges, per-source breakdowns, an 80/20 dev/test split, and which findings help or hurt. An optional `manifest.csv` keeps known campaign groups together and records dataset provenance.
 - **Hostile-input design.** Size limits, per-analyzer timeouts, defanged output, terminal-escape filtering, and no network except one explicit command.
-- **291 automated tests**, including regression tests for Unicode confusables, invisible characters, bidi controls and IDN handling.
+- **304 automated tests**, including regression tests for Unicode confusables, invisible characters, bidi controls and IDN handling.
 
 ## Quick start
 

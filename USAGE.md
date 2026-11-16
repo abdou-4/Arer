@@ -366,8 +366,8 @@ Tuning weights by feel does not work. `arer eval` scores every sample and tells 
 arer eval                      # everything under data/samples
 arer eval --details            # also list every sample with its score
 arer eval --skip-dir archive   # ignore folders named 'archive' (old mail kept only as a stress test)
-arer eval --only dev           # tune on 80% of samples ...
-arer eval --only test          # ... and check on the other 20% now and then
+arer eval --only dev           # tune on the development split ...
+arer eval --only test          # ... and check the held-out split now and then
 arer eval --skip body          # what happens if an analyzer is turned off?
 arer eval --from-history       # re-score your labeled saved scans instantly (no email files)
 arer eval --config /tmp/cfg    # try a copy of config/ with different weights
@@ -375,12 +375,40 @@ arer eval --config /tmp/cfg    # try a copy of config/ with different weights
 
 In the menu this is entry **2 (Measure accuracy)**.
 
-**Labels come from folders:** files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`:
+**Labels come from folders:** files under `phish/` are phishing, files under `legit/` are legitimate. To override one file, add `data/samples/labels.csv`. Prefer a root-relative `path` so files with the same basename cannot collide:
+
+```
+path,label
+phish/sample-9.eml,legit
+```
+
+The older `filename,label` format is still accepted when that basename occurs only once in the dataset:
 
 ```
 filename,label
 sample-9.eml,legit
 ```
+
+If the same filename exists in several folders, the filename-only override is ignored with a `WARNING:` line in the report; use `path` to target the exact sample. If both columns are filled on one row, `path` wins. Duplicate rows for the same target are all ignored (the folder label stays in force), also with a warning.
+
+### Campaign-aware dev/test split and dataset manifest
+
+Add an optional `data/samples/manifest.csv` to keep related messages in the same split and record provenance:
+
+```csv
+path,group_id,dataset,license,reference,collection_date
+phish/0001.eml,phishing-pot:campaign-17,Phishing Pot,CC-BY-SA-4.0,https://example.org/dataset,2026-01-01
+phish/0002.eml,phishing-pot:campaign-17,Phishing Pot,CC-BY-SA-4.0,https://example.org/dataset,2026-01-01
+legit/modern/0001.eml,modern-mail:batch-1,Your dataset,private,local,2026-01-01
+```
+
+- `path` is required and relative to the evaluation root, with `/` separators. It must not be absolute or contain `.` or `..` components.
+- `group_id` is optional. Samples with the same non-empty ID always land on the same side of the dev/test split. Use stable, globally distinct IDs, prefixed with the dataset name when needed (for example `phishing-pot:campaign-17`).
+- `dataset`, `license`, `reference` and `collection_date` are optional provenance fields; the report prints a **Dataset provenance** section for them.
+- Samples without a `group_id` keep the original individual content-hash split, and the report warns about that fallback (`WARNING: N evaluated sample(s) have no group_id ...`).
+- Every manifest path must match an evaluation sample (or live inside a folder you exclude with `--skip-dir`). A malformed, duplicate or unmatched manifest **stops evaluation** with a clear error instead of silently reverting to per-sample splitting. `--from-history` does not use this manifest.
+
+The grouping is only as complete as the IDs you provide. Arer does not automatically detect near-duplicates or discover campaign relationships.
 
 ### What the report shows
 
@@ -390,6 +418,7 @@ sample-9.eml,legit
 | **By source** | See the same numbers per folder (`legit/modern`, `legit/archive`, `phish`), so you can judge false alarms on modern mail without separate runs. |
 | **Phishing MISSED / Legit FLAGGED** | Open the exact emails that need work. |
 | **Score sweep** | Pick thresholds: choose the T that catches the most phishing before legit mail starts getting flagged. |
+| **Campaign grouping / Dataset provenance** | Shown when `manifest.csv` is in use: how many evaluated samples have a `group_id`, and the dataset/license/source metadata. `WARNING:` lines above them flag filename overrides that were ignored as ambiguous and samples that fell back to the content-hash split. |
 | **Findings table** | See which findings help (fire on phishing) and which are noisy (marked `<- noisy`, fire on legit mail). Lower the weight of noisy ones in `rules.yaml`. |
 
 ### The honest tuning workflow
@@ -411,7 +440,7 @@ Keep a change only if detection rose **without** more false alarms. Tune against
 
 1. **Spam is not legitimate mail, and spam is not phishing.** From the SpamAssassin corpus use only `easy_ham`, `easy_ham_2` and `hard_ham` as `legit/`. Put the `spam` folders in `data/samples/spam/`. Eval ignores that folder.
 2. **Era bias.** SpamAssassin mail is from 2002-2003 and has no SPF/DKIM/DMARC results, while modern phishing has them. Findings like `auth.results_missing` then separate your classes by *year*, not by phishing. The fix is modern legitimate mail (below). Until you have it, compare with `arer eval --skip auth --skip headers` to see the content checks without era effects.
-3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many samples, and the dev/test split can leak. Judge by campaigns, not by counts.
+3. **Near-duplicates.** Consecutive Phishing Pot numbers are often the same campaign. 100 samples may be 30 campaigns, so one fix can move many. Record known campaign siblings with the same `group_id` in `manifest.csv` so they cannot cross the dev/test boundary. Arer does not infer campaign relationships automatically.
 4. **Too little modern legit mail.** Aim for 40 or more of your own recent emails, including newsletters, receipts, notifications and mailing lists.
 
 ### Suggested folder layout
