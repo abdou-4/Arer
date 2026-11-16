@@ -84,3 +84,13 @@ dataset revision. If `logic_hash` changed, the old records stay as they are
 `arer eval --from-history` re-scores saved scans with today's rules and
 warns when stored scans are stale; it is convenient for a quick check, but
 a baseline record should always come from the real files.
+
+
+---
+
+## config_hash (R3)
+
+Every evaluation run also reports `config_hash`: the fingerprint of the
+effective scoring configuration (weights, caps, thresholds, overrides, list
+contents; `arer.config.config_hash`). Two runs with different `config_hash`
+values are different tunings and must never be compared as one baseline.

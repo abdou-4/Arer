@@ -30,6 +30,30 @@ atomic (temp file + rename); an existing record is never silently replaced —
 a same-ID/different-content collision preserves BOTH records and reports an
 integrity error.
 
+## Schema v2 (R3)
+
+The producer writes `arer.alert.v2` (`tests/golden/alert_v2.json`); v1 records
+in existing queues keep reading back unchanged — the reader dispatches on the
+`schema` marker and all v2 additions are optional for readers
+(`tests/test_alert.py::test_v1_records_still_read_back`). v2 adds:
+
+| field | meaning |
+|---|---|
+| `config_hash` | fingerprint of the effective scoring CONFIG (weights, caps, thresholds, overrides, lists) — complements `logic_hash` (the CODE fingerprint) |
+| `engine_version` / `parser_version` | arer + mail-parser versions that produced the record |
+| `sha256_verified` | R1.6: native `.eml`/`.msg` = true; parser-JSON = false (claimed identity) |
+| `analysis_complete` + `analysis_errors` | R1.4: false when analyzers failed (the record joined the queue because of it) |
+| `reasons` | top-3 structured reasons (`finding`, `category`, `weight`, `confidence`, `points`) — they agree with the scoring, no evidence-string scraping |
+| `indicators` | structured IOC block: `urls`, `url_domains`, `sender_domain`, `attachments` (each with `sha256`, `inline` flag, filename, size) |
+| `body_fingerprint` | normalized-body fingerprint (campaign clustering input, R5) |
+| `campaign_id` | set by the campaign layer, `""` = unassigned |
+| `scan.from_domain` | sender domain, always stored |
+| `scan.from` | plaintext sender address — EMPTY unless the operator passed `--store-sender` (R4.5 privacy default) |
+
+Storage/defang split (R4.4): v2 records store attacker-controlled values RAW
+and defang exactly once at serialization; v1 records were stored already
+defanged and pass through untouched.
+
 ## The record
 
 | field | meaning |
