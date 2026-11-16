@@ -31,7 +31,8 @@ from .exitcodes import (ALERT_EXITS, ANALYSIS_ERROR_EXIT, EXIT_CODES, EXIT_SEVER
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alerts,
                     to_json as alert_to_json, write_alert)
-from .campaign import build_campaigns, campaign_level, campaign_status
+from .campaign import (build_campaigns, build_clusters, campaign_level, campaign_status,
+                       strong_keys)
 from .disposition import STATUSES, build_disposition, disposition_path, read_disposition, write_disposition
 from .export import export_row, is_confirmed_phishing, render as render_export
 from .iocs import collect_iocs, to_blocklist as iocs_to_blocklist, to_csv as iocs_to_csv, to_misp as iocs_to_misp
@@ -691,6 +692,98 @@ def alerts_cases(directory):
     if bad:
         click.echo(f"{len(rows)} case(s), {bad} unreadable")
     sys.exit(1 if bad else 0)
+
+
+@alerts.command("clusters")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--level", type=click.Choice([lv.value for lv in Level]),
+              help="Only clusters whose most severe record has this level.")
+@click.option("--csv", "csv_out", type=click.Path(dir_okay=False, path_type=Path),
+              help="Also write a manifest-compatible 'sha256,group_id' mapping for evaluation.")
+def alerts_clusters(directory, level, csv_out):
+    """PROPOSED campaigns (R5): records grouped by STRONG shared artifacts -
+    exact URL host+path, non-inline attachment hashes, normalized body
+    fingerprints - never by sender or domain alone. Every member carries the
+    key evidence that linked it. Membership is a proposal: confirm with
+    `alerts confirm-campaign`."""
+    reads = read_alerts(directory)
+    bad = 0
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+    rows = []
+    for c in build_clusters(reads):
+        lvl = campaign_level([a for a, _p in c.alerts])
+        if level and lvl.value != level:
+            continue
+        rows.append((c, lvl))
+    if rows:
+        click.echo(f"{'campaign_id':<20}{'mails':>5}{'seen':>6}  {'level':<18}"
+                   f"{'first':<21}{'last':<21}keys")
+        for c, lvl in rows:
+            strong = ", ".join(k.split(":", 1)[0] for k in c.keys if not k.startswith("sha:")) or "-"
+            click.echo(f"{c.campaign_id:<20}{len(c.mail_sha256s):>5}{len(c.alerts):>6}  {lvl.value:<18}"
+                       f"{c.alerts[0][0].generated_utc:<21}{c.alerts[-1][0].generated_utc:<21}{strong}")
+    elif not bad:
+        click.echo(f"no alert records in {directory}")
+    if csv_out:
+        import csv as _csv
+        csv_out.parent.mkdir(parents=True, exist_ok=True)
+        with csv_out.open("w", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh, lineterminator="\n")
+            w.writerow(["sha256", "group_id"])
+            for c, _lvl in rows:
+                for sha in c.mail_sha256s:
+                    w.writerow([sha, c.campaign_id])
+        click.echo(f"manifest mapping: {len(rows)} campaign(s) -> {csv_out}")
+    if bad:
+        click.echo(f"{len(rows)} cluster(s), {bad} unreadable", err=True)
+    sys.exit(1 if bad else 0)
+
+
+@alerts.command("confirm-campaign")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("campaign_id")
+@click.option("--reject", is_flag=True, help="Record a REJECTION instead of a confirmation.")
+@click.option("--note", help="Why (the analyst's words, stored verbatim).")
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
+              help="Config folder (for the history database).")
+def alerts_confirm_campaign(directory, campaign_id, reject, note, config_dir):
+    """Record the analyst's verdict on a PROPOSED campaign (R5.2): confirmed
+    or rejected, with who/when/why, append-only in history.db (auditable).
+    Copy CAMPAIGN_ID from `alerts clusters`. The proposal itself is never
+    auto-trusted; the confirmation is what downstream tooling may rely on."""
+    import getpass
+    clusters = build_clusters(read_alerts(directory))
+    matches = [c for c in clusters if c.campaign_id.startswith(campaign_id.lower())]
+    if len(matches) != 1:
+        hint = "several match, give more characters" if len(matches) > 1 else "no campaign matches that id"
+        raise click.ClickException(hint + " (copy the campaign_id from: arer alerts clusters DIRECTORY)")
+    c = matches[0]
+    try:
+        cfg = load_config(config_dir)
+    except ConfigError as e:
+        raise click.ClickException(str(e))
+    store = HistoryStore.open(cfg.history.db_path, create=True)
+    if store is None:
+        raise click.ClickException(f"no history database at {cfg.history.db_path}")
+    try:
+        value = "rejected" if reject else "confirmed"
+        try:
+            store.record_decision(
+                c.campaign_id, kind="campaign", value=value, provenance="analyst",
+                analyst=getpass.getuser(), source_ref=f"alerts clusters {directory}",
+                note=note or "",
+                training_eligible=False,
+                eligibility_reason="campaign relationship, never a training label")
+        except MigrationRequired as e:
+            raise click.ClickException(safe_text(e, 240)) from e
+    finally:
+        store.close()
+    action = "rejected" if reject else "confirmed"
+    click.echo(f"{c.campaign_id}  {len(c.mail_sha256s)} mail(s)  {action}"
+               + (f"  ({safe_text(note, 120)})" if note else ""))
 
 
 @alerts.command("stats")

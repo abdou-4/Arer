@@ -291,7 +291,9 @@ def alerts_flow() -> None:
         ("campaigns", "Show campaigns - one row per distinct mail  (exact sha256)"),
         ("set-group", "Record one decision for every alert of the same mail"),
         ("stats", "Queue metrics - backlog, false alarms, response time"),
-        ("cases", "Case queue - one row per mail, ranked by severity (work top-down)")])
+        ("cases", "Case queue - one row per mail, ranked by severity (work top-down)"),
+        ("clusters", "Campaign clusters - proposed groups with key evidence"),
+        ("confirm-campaign", "Confirm or reject a proposed campaign")])
     if what is None:
         return
     folder = ask_path("Folder with the alert records  (the folder you gave scan --alerts)", want="folder")
@@ -357,6 +359,18 @@ def alerts_flow() -> None:
         run_cli(["alerts", "stats", str(folder)])
     elif what == "cases":
         run_cli(["alerts", "cases", str(folder)])
+    elif what == "clusters":
+        run_cli(["alerts", "clusters", str(folder)])
+    elif what == "confirm-campaign":
+        cid = click.prompt(f"  campaign_id from the clusters list {dim('(q = back)')}",
+                           default="", show_default=False).strip()
+        if cid and cid.lower() not in ("q", "back"):
+            reject = not click.confirm("  Confirm this campaign?", default=True)
+            note = click.prompt("  A short note (optional, press Enter to skip)", default="", show_default=False).strip()
+            args = ["alerts", "confirm-campaign", str(folder), cid] + (["--reject"] if reject else [])
+            if note:
+                args += ["--note", note]
+            run_cli(args)
     else:
         sha = click.prompt(f"  sha256 of the mail, from the campaigns list (6 or more characters) {dim('(q = back)')}",
                            default="", show_default=False).strip()
@@ -420,6 +434,8 @@ def help_flow() -> None:
     arer alerts export DIR                 export CONFIRMED phishing cases only (IOC gate)
     arer alerts export-queue DIR           export the whole queue for SIEM triage
     arer alerts iocs DIR [--raw]           structured IOCs of confirmed cases (csv/blocklist/misp)
+    arer alerts clusters DIR               proposed campaigns with key evidence
+    arer alerts confirm-campaign DIR ID    record the analyst's verdict on a campaign
     arer history migrate [--dry-run]       upgrade data/history.db (backup first, provenance)
     arer history import-dispositions DIR   import queue decisions as legacy_unverified
     arer watch DROPDIR [--once]            scan every mail that lands in a folder

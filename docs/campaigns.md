@@ -101,3 +101,28 @@ existing records.
 Campaign grouping stays read-side only; membership depends on the alert
 records alone. A broken record or sidecar is named on stderr, excluded, and
 makes the command exit 1.
+
+
+## Campaign clusters (R5): strong keys, never sender/domain alone
+
+`arer alerts clusters DIR` groups records into PROPOSED campaigns via strong
+shared artifacts:
+
+- the exact mail hash (`sha:`) — byte-identical copies stay one case;
+- exact URL host+path (`url:`) — scheme, query, fragment and default ports
+  are normalized away; percent-encoding is decoded once; a domain or host
+  ALONE is never a key;
+- attachment hashes (`att:`) — only NON-inline attachments (a shared logo or
+  tracking pixel can never create a campaign);
+- the normalized-body fingerprint (`body:`).
+
+Every member records WHICH key linked it (the evidence list). `campaign_id`
+is durable: it derives from the cluster's canonical key, so a new member
+joining later cannot renumber the campaign. Membership is a PROPOSAL —
+`alerts confirm-campaign DIR CAMPAIGN_ID [--reject]` records the analyst's
+verdict (who/when/why) append-only in history.db; nothing is auto-confirmed
+and campaign relationships are never training labels.
+
+`alerts clusters --csv OUT.csv` writes a manifest-compatible
+`sha256,group_id` mapping so confirmed campaign ids can drive group-aware
+evaluation splits (one campaign never straddles train/dev/test).
