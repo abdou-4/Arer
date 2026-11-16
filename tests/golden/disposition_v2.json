@@ -1,0 +1,10 @@
+{
+  "schema": "arer.disposition.v2",
+  "alert_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "mail_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status": "acknowledged",
+  "note": "checked sender domain",
+  "set_utc": "2026-11-17T10:00:00Z",
+  "provenance": "analyst",
+  "analyst": ""
+}

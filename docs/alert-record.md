@@ -10,7 +10,8 @@ a contract change like the exit codes in `docs/cli-contract.md`.
 
 ```bash
 arer scan /mail/drop --alerts /alerts
-# one <alert_id>.alert.json per alert-level email; --raw keeps IOCs un-defanged
+# one <alert_id>.alert.json per alert-level email
+# (v2 stores the raw representation; defanging happens on output - R4.4)
 ```
 
 "Alert-worthy" follows the exit-code contract: `SUSPICIOUS`,

@@ -119,23 +119,36 @@ def test_render_is_safe_by_default_and_raw_stays_raw():
 def test_cli_export_jsonl_to_stdout_and_file(tmp_path):
     from arer.cli import main
     from arer.alert import read_alerts
+    from arer.util.defang import clean
     d = make_queue(tmp_path)
     rec = read_alerts(d)[0]
+    # R4.1: the DEFAULT export is the confirmed-only gate - an unreviewed
+    # record contributes nothing and is counted in the exclusion summary
     out = CliRunner().invoke(main, ["alerts", "export", str(d)])
     assert out.exit_code == 0, out.output
-    assert json.loads(out.output.splitlines()[0])["schema"] == "arer.alert.v2"
+    assert "confirmed: 0 case(s) exported" in out.output and "unreviewed 1" in out.output
+    assert "https://" not in out.output              # no live IOC leaves an unconfirmed case
+
+    # the analyst confirms the case -> it becomes exportable
+    CliRunner().invoke(main, ["alerts", "set", str(d), rec.alert.alert_id[:8], "phishing", "--note", "verified run"])
+    hit = CliRunner().invoke(main, ["alerts", "export", str(d)])
+    assert hit.exit_code == 0 and "confirmed: 1 case(s) exported" in hit.output
+    json_line = next(l for l in hit.output.splitlines() if l.startswith("{"))
+    assert json.loads(json_line)["schema"] == "arer.alert.v2"
+    # R1.1: the record file name is the immutable alert_id (defanged in the export)
+    assert json.loads(json_line)["record_file"] == clean(rec.path.name)
+
     f = tmp_path / "dump" / "alerts.jsonl"
     to_file = CliRunner().invoke(main, ["alerts", "export", str(d), "-o", str(f)])
-    assert to_file.exit_code == 0 and "exported 1 alert" in to_file.output
-    # R1.1: the record file name is the immutable alert_id, not the mail name;
-    # it is defanged like every string in the export (safe-by-default)
-    from arer.util.defang import clean
-    assert json.loads(f.read_text(encoding="utf-8").splitlines()[0])["record_file"] == clean(rec.path.name)
+    assert to_file.exit_code == 0
+    assert len(json.loads("[" + f.read_text(encoding="utf-8").strip().replace("\n", ",") + "]")) == 1
 
 
 def test_cli_export_csv(tmp_path):
     from arer.cli import main
     d = make_queue(tmp_path)
+    rec = read_alerts(d)[0]
+    CliRunner().invoke(main, ["alerts", "set", str(d), rec.alert.alert_id[:8], "phishing"])
     f = tmp_path / "q.csv"
     res = CliRunner().invoke(main, ["alerts", "export", str(d), "--format", "csv", "-o", str(f)])
     assert res.exit_code == 0, res.output
@@ -144,22 +157,28 @@ def test_cli_export_csv(tmp_path):
 
 
 def test_cli_export_filters(tmp_path):
+    """The queue (case-report) export keeps the status/level filters; the
+    confirmed-only export cannot be weakened by them."""
     from arer.cli import main
     from arer.alert import read_alerts
     from arer.util.defang import clean
     d = make_queue(tmp_path)
-    rec_name = clean(read_alerts(d)[0].path.name)   # export defangs file names too
+    rec_name = clean(read_alerts(d)[0].path.name)
     alert = read_alerts(d)[0].alert
     CliRunner().invoke(main, ["alerts", "set", str(d), alert.alert_id[:8], "benign"])
-    hit = CliRunner().invoke(main, ["alerts", "export", str(d), "--status", "benign"])
+    hit = CliRunner().invoke(main, ["alerts", "export-queue", str(d), "--status", "benign"])
     assert hit.exit_code == 0 and rec_name in hit.output
-    miss = CliRunner().invoke(main, ["alerts", "export", str(d), "--status", "new"])
+    miss = CliRunner().invoke(main, ["alerts", "export-queue", str(d), "--status", "new"])
     assert miss.exit_code == 0 and rec_name not in miss.output
-    miss2 = CliRunner().invoke(main, ["alerts", "export", str(d), "--level", "MALICIOUS"])
+    miss2 = CliRunner().invoke(main, ["alerts", "export-queue", str(d), "--level", "MALICIOUS"])
     assert miss2.exit_code == 0 and rec_name not in miss2.output
+    # benign can never be smuggled through the confirmed export
+    gate = CliRunner().invoke(main, ["alerts", "export", str(d)])
+    assert gate.exit_code == 0 and "confirmed: 0 case(s) exported" in gate.output
+    assert rec_name not in gate.output
 
 
-def test_cli_export_names_corrupt_files_and_still_exports(tmp_path):
+def test_cli_export_names_corrupt_files_and_still_reports(tmp_path):
     from arer.cli import main
     from arer.alert import read_alerts
     from arer.util.defang import clean
@@ -169,9 +188,12 @@ def test_cli_export_names_corrupt_files_and_still_exports(tmp_path):
     res = CliRunner().invoke(main, ["alerts", "export", str(d)])
     assert res.exit_code == 1
     assert "corrupt.alert.json" in res.output
-    json_line = next(l for l in res.output.splitlines() if l.startswith("{"))   # stderr is interleaved first
+    assert "confirmed: 0 case(s) exported" in res.output and "unreadable" in res.output
+    # the queue export still flattens what it can read
+    q = CliRunner().invoke(main, ["alerts", "export-queue", str(d)])
+    json_line = next(l for l in q.output.splitlines() if l.startswith("{"))   # stderr is interleaved first
     assert json.loads(json_line)["record_file"] == rec_name
-    assert "exported, 1 unreadable" in res.output
+    assert "exported, 1 unreadable" in q.output
 
 
 def test_cli_export_empty_folder(tmp_path):
@@ -179,4 +201,6 @@ def test_cli_export_empty_folder(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     res = CliRunner().invoke(main, ["alerts", "export", str(empty)])
-    assert res.exit_code == 0 and "no alert records" in res.output
+    assert res.exit_code == 0 and "no confirmed phishing cases" in res.output
+    q = CliRunner().invoke(main, ["alerts", "export-queue", str(empty)])
+    assert q.exit_code == 0 and "no alert records" in q.output

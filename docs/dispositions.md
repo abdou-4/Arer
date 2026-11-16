@@ -119,3 +119,12 @@ Rules:
   training-eligible until an analyst re-decides them;
 - tool verdicts and unreviewed alerts can never become training labels
   ("only human labels teach the tool").
+
+## Provenance in the sidecar (R4, schema v2)
+
+New sidecars are `arer.disposition.v2` and carry `provenance` (analyst) and
+`analyst` (local analyst id). The v1 sidecars of an existing queue read back
+as `legacy_unverified`. The export gate (`is_analyst_confirmed_phishing`)
+accepts ONLY analyst-provenance `phishing` decisions, so an old queue's
+records are never exported as confirmed indicators until an analyst
+re-decides them with `alerts set`.

@@ -20,22 +20,43 @@ _HOST = re.compile(
     r"(?<![\w\[])((?:\d{1,3}\.){3}\d{1,3}|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24})(?![\w\]])",
     re.I,
 )
+# Unicode dot variants that hostile hosts use: ideographic full stop,
+# full-width full stop, halfwidth ideographic full stop
+_UNICODE_DOT = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+# Full-width scheme lookalikes (ｈｔｔｐ://...) fold to ASCII before matching
+_FULLWIDTH = str.maketrans({c: chr(c - 0xFEE0) for c in range(0xFF01, 0xFF5F)})
+
+# Placeholders used to make defang() IDEMPOTENT (R4.4): already-defanged
+# markers are swapped out during the pass so they can never be re-matched
+# and damaged (the old code turned "[@]" into "[[@]]" and "[.]" into
+# "[[.]]" on the second pass).
+_AT_MARK = "\x00AT\x00"
+_DOT_MARK = "\x00DOT\x00"
 
 
 def defang(text: str) -> str:
-    """hxxps://evil[.]com/login , user[@]evil[.]com , 1[.]2[.]3[.]4"""
+    """hxxps://evil[.]com/login , user[@]evil[.]com , 1[.]2[.]3[.]4
+
+    Idempotent (R4.4): defang(defang(x)) == defang(x). Already-defanged
+    markers are protected with placeholders for the duration of the pass,
+    and Unicode dot variants (\u3002 \uff0e \uff61) and full-width scheme
+    lookalikes are normalized before matching so homoglyph hosts are
+    defanged too. IPv6 addresses have no dots and are left unchanged."""
     if not text:
         return text
+    text = text.translate(_FULLWIDTH).translate(_UNICODE_DOT)
     text = _SCHEME.sub(lambda m: f"{m.group(1)}xx{m.group(2)}://", text)
     text = _FTP.sub("fxp://", text)
+    text = text.replace("[@]", _AT_MARK).replace("[.]", _DOT_MARK)
     text = text.replace("@", "[@]")
-    return _HOST.sub(lambda m: m.group(1).replace(".", "[.]"), text)
+    text = _HOST.sub(lambda m: m.group(1).replace(".", "[.]"), text)
+    return text.replace(_AT_MARK, "[@]").replace(_DOT_MARK, "[.]")
 
 
 # --- 2. terminal / log safety ----------------------------------------------
 # C0/C1 control chars (includes ESC, so ANSI sequences die) + bidi override/isolate chars
 _UNSAFE = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u202a-\u202e"
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u061c\u2028-\u202e"
     r"\u2060-\u2064\u2066-\u2069\u200b-\u200f\ufeff\U000e0000-\U000e007f]"
 )
 

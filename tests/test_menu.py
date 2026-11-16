@@ -202,10 +202,10 @@ def test_alert_queue_show_and_export(tmp_path, env):
 def test_alert_queue_campaigns_and_set_group(tmp_path, env):
     from arer.alert import read_alerts
     queue = _alert_queue(tmp_path)
-    r = run(env, f"{item('Alert queue')}\n5\n{queue}\n1\n0\n")          # campaigns, all
+    r = run(env, f"{item('Alert queue')}\n6\n{queue}\n1\n0\n")          # campaigns, all
     assert "arer alerts campaigns" in r.output
     sha = read_alerts(queue)[0].alert.verdict.sha256[:8]
-    d = run(env, f"{item('Alert queue')}\n6\n{queue}\n{sha}\n3\nreal run\n0\n")   # set-group -> phishing
+    d = run(env, f"{item('Alert queue')}\n7\n{queue}\n{sha}\n3\nreal run\n0\n")   # set-group -> phishing
     assert "marked phishing" in d.output
     after = CliRunner().invoke(main, ["alerts", "list", str(queue)])
     assert " phishing  " in after.output
@@ -222,7 +222,7 @@ def test_watch_flow_runs_one_pass_and_archives(tmp_path, env):
 
 def test_alert_queue_stats_flow(tmp_path, env):
     queue = _alert_queue(tmp_path)
-    r = run(env, f"{item('Alert queue')}\n7\n{queue}\n0\n")             # stats
+    r = run(env, f"{item('Alert queue')}\n8\n{queue}\n0\n")             # stats
     assert "arer alerts stats" in r.output and "records" in r.output
 
 

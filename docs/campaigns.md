@@ -95,3 +95,9 @@ a640cdf35b1e  5 alert(s) marked phishing  (real run, blocked sender)
 
 No new schema is introduced in Phase 6.4: campaigns are a view over the two
 existing records.
+
+## Reading rules (unchanged by R4/R5)
+
+Campaign grouping stays read-side only; membership depends on the alert
+records alone. A broken record or sidecar is named on stderr, excluded, and
+makes the command exit 1.

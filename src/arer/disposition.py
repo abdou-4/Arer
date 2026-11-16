@@ -27,11 +27,20 @@ from typing import Literal, NamedTuple
 import pydantic
 from pydantic import BaseModel, Field, field_validator
 
-SCHEMA_VERSION = "arer.disposition.v1"
-KNOWN_SCHEMAS = (SCHEMA_VERSION,)      # readers dispatch on this tuple
+SCHEMA_V1 = "arer.disposition.v1"
+SCHEMA_V2 = "arer.disposition.v2"
+SCHEMA_VERSION = SCHEMA_V2             # what the writer produces today
+KNOWN_SCHEMAS = (SCHEMA_V1, SCHEMA_V2)  # readers dispatch on this tuple
 
 STATUSES = ("acknowledged", "benign", "phishing")
 Status = Literal["acknowledged", "benign", "phishing"]
+
+# R2/R4 provenance: where a decision came from. v1 sidecars (no provenance
+# field) read back as provenance "" and are treated as legacy_unverified by
+# every trust decision - they can never authorize an IOC export or become a
+# training label.
+ANALYST = "analyst"
+PROVENANCES = ("analyst", "import", "tool", "legacy_unverified")
 
 DISPOSITION_SUFFIX = ".disposition.json"   # sits beside "<...>.alert.json"
 
@@ -41,12 +50,15 @@ class DispositionError(ValueError):
 
 
 class Disposition(BaseModel):
-    schema_: str = Field(SCHEMA_VERSION, alias="schema")
+    schema_: str = Field(SCHEMA_V2, alias="schema")
     alert_id: str                       # links to the alert record (never re-minted)
     mail_sha256: str = ""               # copied from verdict.sha256 for grepping/export
     status: Status
     note: str = ""                      # analyst's words, verbatim
     set_utc: str                        # when this disposition was set, ISO-8601 UTC Z
+    # ---- v2 additions (optional so v1 sidecars validate unchanged) -------- #
+    provenance: str = ""                # analyst | import | tool | legacy_unverified; "" = legacy
+    analyst: str = ""                   # analyst identity for analyst-originated decisions
 
     @field_validator("status", mode="before")
     @classmethod
@@ -54,6 +66,18 @@ class Disposition(BaseModel):
         if v not in STATUSES:
             raise ValueError(f"status must be one of: {', '.join(STATUSES)}")
         return v
+
+    @property
+    def effective_provenance(self) -> str:
+        """The provenance a trust decision may rely on: an explicit one, or
+        legacy_unverified for v1 sidecars that predate the field."""
+        return self.provenance if self.provenance in PROVENANCES else "legacy_unverified"
+
+    def is_analyst_confirmed_phishing(self) -> bool:
+        """The R4.1 export gate, in one place: a current, valid,
+        analyst-originated true_positive decision. Import, tool,
+        legacy_unverified, acknowledged, benign and unreviewed never pass."""
+        return self.status == "phishing" and self.effective_provenance == "analyst"
 
 
 class DispositionRead(NamedTuple):
@@ -66,11 +90,14 @@ class DispositionRead(NamedTuple):
 
 
 def build_disposition(alert_id: str, status: str, mail_sha256: str = "", note: str = "",
-                      *, now: datetime | None = None) -> Disposition:
-    """Assemble the record. `now` is injectable so tests are byte-stable."""
+                      *, now: datetime | None = None, provenance: str = ANALYST,
+                      analyst: str = "") -> Disposition:
+    """Assemble the record. `now` is injectable so tests are byte-stable.
+    Writer default: provenance=analyst (the CLI passes the local analyst id)."""
     return Disposition(
         alert_id=alert_id, mail_sha256=mail_sha256, status=status, note=note,
-        set_utc=(now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        set_utc=(now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        provenance=provenance, analyst=analyst)
 
 
 def to_json(d: Disposition, indent: int = 2) -> str:

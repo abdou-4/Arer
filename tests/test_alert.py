@@ -168,7 +168,7 @@ def test_scan_alerts_dir_writes_records_for_alert_level_emails_only(tmp_path):
     assert d["schema"] == "arer.alert.v2"
     assert written[0] == f"{d['alert_id']}.alert.json"
     assert d["verdict"]["level"] in {"SUSPICIOUS", "LIKELY_PHISHING", "MALICIOUS"}
-    assert d["source_file"] == "salad[.]eml"        # stored defanged (v1 stores attacker strings defanged)
+    assert d["source_file"] == "salad.eml"          # v2 stores the raw representation (defang on output)
 
 
 def test_scan_alerts_dir_is_created_and_batch_safe(tmp_path):

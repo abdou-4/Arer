@@ -1,15 +1,22 @@
 """
-export.py - Phase 6.3: the aggregate view of the alert queue.
+export.py - Phase 6.3 + R4: the export layer of the alert queue.
 
-One flat line (JSONL) or row (CSV) per alert, dispositions merged in, for
-SIEM / SOAR / spreadsheet consumption. The queue folder stays the source of
-truth; the export is derived and carries `record_file` so every line can be
-traced back to the exact record it came from.
+Two separate operations (R4.1):
 
-Safe by default: every string is defanged on the way out (idempotent on
-records that were already defanged at scan time), so an export can be pasted
-into a ticket or shipped to a SIEM without leaking live IOCs. `--raw` keeps
-everything as stored, for pipelines that want the real values.
+- the IOC/case export (`alerts export`) carries ONLY cases whose current,
+  valid decision is an ANALYST-originated true_positive; the gate lives here
+  in the service, not just in CLI help text, and cannot be bypassed by tool,
+  imported, legacy_unverified or unreviewed decisions;
+- the case-report export (`alerts export-queue`) flattens every readable
+  record (what a SIEM wants to see for triage) under its own explicit name.
+
+Safe by default (R4.3/R4.4):
+- CSV cells are neutralized against spreadsheet formula injection (=, +, -,
+  @, tab, CR - including after leading whitespace/control characters);
+- v2 records are stored RAW and defanged EXACTLY ONCE on export; v1 records
+  were stored already defanged, so only their sidecar note is defanged here
+  (defanging twice is what damaged strings like "alert[[@]]..." before);
+- `--raw` keeps everything as stored.
 
 The flat schema is frozen by tests/test_export.py (EXPORT_KEYS / COLUMNS);
 adding a field is a deliberate change like any other contract change.
@@ -19,8 +26,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 
-from .alert import Alert
+from .alert import SCHEMA_V2, Alert
 from .disposition import Disposition
 from .util.defang import clean_deep
 
@@ -67,12 +75,22 @@ def export_row(a: Alert, d: Disposition | None, record_file: str) -> dict:
     }
 
 
+# R4.3: spreadsheet formula injection. A cell that (after any leading
+# whitespace/control characters a spreadsheet might ignore) starts with a
+# formula trigger is neutralized with a leading apostrophe.
+_FORMULA_START = re.compile(r"^[\s\x00-\x1f]+?[=+\-@\t\r]|^[=+\-@\t\r]")
+
+
 def _csv_cell(v) -> str:
     if isinstance(v, dict):
-        return ",".join(f"{k}={v[k]}" for k in v)          # csv.writer quotes it
-    if isinstance(v, list):
-        return ",".join(str(x) for x in v)
-    return v
+        cell = ",".join(f"{k}={v[k]}" for k in v)          # csv.writer quotes it
+    elif isinstance(v, list):
+        cell = ",".join(str(x) for x in v)
+    else:
+        cell = v
+    if isinstance(cell, str) and _FORMULA_START.match(cell):
+        return "'" + cell                                  # spreadsheet treats it as text
+    return cell
 
 
 def to_jsonl(rows: list[dict]) -> str:
@@ -89,10 +107,62 @@ def to_csv(rows: list[dict]) -> str:
 
 
 def render(rows: list[dict], fmt: str, defang: bool = True) -> str:
+    """Defang exactly once (R4.4): v2 rows are stored raw and cleaned here;
+    v1 rows were stored already defanged and pass through untouched EXCEPT
+    the sidecar note, which was never defanged at rest."""
     if defang:
-        schemas = [r.get("schema") for r in rows]
-        rows = [clean_deep(r) for r in rows]
-        for r, s in zip(rows, schemas):
-            if s:
-                r["schema"] = s          # machine-readable marker: never defanged (see alert.to_json)
+        fixed = []
+        for r in rows:
+            if r.get("schema") == SCHEMA_V2:
+                cleaned = clean_deep(r)
+                cleaned["schema"] = r.get("schema")   # machine-readable marker: never defanged
+                fixed.append(cleaned)
+            else:
+                row = dict(r)
+                note = row.get("disposition_note")
+                if note:
+                    row["disposition_note"] = clean_deep(note)
+                fixed.append(row)
+        rows = fixed
     return to_jsonl(rows) if fmt == "jsonl" else to_csv(rows)
+
+
+# ---- R4.1: the analyst-confirmed export gate ------------------------------- #
+
+def is_confirmed_phishing(a: Alert, d: Disposition | None) -> bool:
+    """True only for a current, valid, analyst-originated true_positive
+    decision (delegates to the disposition's own gate)."""
+    return d is not None and d.is_analyst_confirmed_phishing()
+
+
+def export_confirmed(reads, exclusion_counts: dict | None = None) -> list[dict]:
+    """Flatten ONLY the analyst-confirmed cases (the default IOC export).
+
+    reads: AlertRead items. Broken records are counted but never exported.
+    Every excluded record increments a counter in exclusion_counts - counts
+    only, never the excluded IOCs themselves."""
+    from .alert import AlertRead                          # noqa: F401 - typing aid
+    rows = []
+    counts = exclusion_counts if exclusion_counts is not None else {}
+    for r in reads:
+        if r.alert is None:
+            counts["unreadable"] = counts.get("unreadable", 0) + 1
+            continue
+        d = None
+        try:
+            from .disposition import read_disposition
+            d = read_disposition(r.path, r.alert)
+        except Exception:
+            counts["unreadable"] = counts.get("unreadable", 0) + 1
+            continue
+        if is_confirmed_phishing(r.alert, d):
+            rows.append(export_row(r.alert, d, r.path.name))
+        elif d is None:
+            counts["unreviewed"] = counts.get("unreviewed", 0) + 1
+        elif d.effective_provenance != "analyst":
+            counts["unverified_provenance"] = counts.get("unverified_provenance", 0) + 1
+        elif d.status == "benign":
+            counts["benign"] = counts.get("benign", 0) + 1
+        else:                                             # acknowledged
+            counts["acknowledged"] = counts.get("acknowledged", 0) + 1
+    return rows

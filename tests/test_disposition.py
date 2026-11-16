@@ -37,7 +37,8 @@ from arer.disposition import (STATUSES, SCHEMA_VERSION, DispositionError,
                               disposition_path, load_disposition, read_disposition,
                               to_json as disposition_to_json)
 
-GOLDEN = Path(__file__).parent / "golden" / "disposition_v1.json"
+GOLDEN = Path(__file__).parent / "golden" / "disposition_v2.json"
+GOLDEN_V1 = Path(__file__).parent / "golden" / "disposition_v1.json"
 
 FIXED_NOW = datetime(2026, 11, 17, 10, 0, 0, tzinfo=timezone.utc)
 
@@ -60,17 +61,41 @@ def write_json(path: Path, data) -> None:
 
 def test_frozen_key_set():
     d = json.loads(disposition_to_json(_fixed()))
-    assert d["schema"] == SCHEMA_VERSION == "arer.disposition.v1"
-    assert set(d) == {"schema", "alert_id", "mail_sha256", "status", "note", "set_utc"}
+    assert d["schema"] == SCHEMA_VERSION == "arer.disposition.v2"
+    assert set(d) == {"schema", "alert_id", "mail_sha256", "status", "note", "set_utc",
+                      "provenance", "analyst"}                       # v2 (R4): provenance
 
 
 def test_golden_disposition_record():
+    """v2 output is frozen byte-for-byte; the old disposition_v1.json stays
+    as the read-compatibility fixture."""
     actual = disposition_to_json(_fixed())
     if os.environ.get("UPDATE_GOLDEN"):              # deliberate schema change only
         GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         GOLDEN.write_text(actual, encoding="utf-8")
         pytest.skip("golden regenerated - commit it and review the diff")
     assert actual == GOLDEN.read_text(encoding="utf-8")
+
+
+def test_v1_sidecars_read_back_as_legacy_unverified():
+    """READ compatibility: the golden v1 sidecar (no provenance field)
+    validates and is treated as legacy_unverified - never as an
+    analyst-confirmed decision."""
+    d = load_disposition(GOLDEN_V1)
+    assert d.status == "acknowledged"
+    assert d.effective_provenance == "legacy_unverified"
+    assert d.is_analyst_confirmed_phishing() is False
+
+
+def test_export_gate_only_accepts_analyst_provenance():
+    from arer.disposition import build_disposition
+    gate = lambda d: d.is_analyst_confirmed_phishing()     # noqa: E731
+    for prov in ("", "legacy_unverified", "tool", "import"):
+        d = build_disposition("a" * 32, "phishing", provenance=prov)
+        assert not gate(d), f"provenance={prov!r} must never authorize an IOC export"
+    assert gate(build_disposition("a" * 32, "phishing", provenance="analyst"))
+    assert not gate(build_disposition("a" * 32, "benign", provenance="analyst"))
+    assert not gate(build_disposition("a" * 32, "acknowledged", provenance="analyst"))
 
 
 def _fixed():

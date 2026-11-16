@@ -286,7 +286,8 @@ def alerts_flow() -> None:
         ("list", "Show the queue  (new = needs a decision)"),
         ("set", "Record my decision about one alert"),
         ("show", "Show one full alert record"),
-        ("export", "Export for a SIEM / SOAR or spreadsheet"),
+        ("export", "Export the queue for a SIEM / SOAR or spreadsheet"),
+        ("iocs", "Export confirmed IOCs (analyst-confirmed phishing only)"),
         ("campaigns", "Show campaigns - one row per distinct mail  (exact sha256)"),
         ("set-group", "Record one decision for every alert of the same mail"),
         ("stats", "Queue metrics - backlog, false alarms, response time"),
@@ -327,7 +328,19 @@ def alerts_flow() -> None:
         if fmt is None:
             return
         out = click.prompt("  File to write  (press Enter to print to the screen)", default="", show_default=False).strip()
-        args = ["alerts", "export", str(folder), "--format", fmt]
+        args = ["alerts", "export-queue", str(folder), "--format", fmt]
+        if out:
+            args += ["-o", out]
+        run_cli(args)
+    elif what == "iocs":
+        fmt = ask_choice("Format:", [("csv", "CSV - typed columns (kind, value, case, campaign)"),
+                                     ("blocklist", "Plain blocklist - one indicator per line"),
+                                     ("misp", "MISP event JSON")])
+        if fmt is None:
+            return
+        raw = click.confirm("  Export LIVE indicators (un-defanged)? answer no for safe display", default=False)
+        out = click.prompt("  File to write  (press Enter to print to the screen)", default="", show_default=False).strip()
+        args = ["alerts", "iocs", str(folder), "--format", fmt] + (["--raw"] if raw else [])
         if out:
             args += ["-o", out]
         run_cli(args)
@@ -404,7 +417,9 @@ def help_flow() -> None:
     arer alerts list|campaigns|cases|show DIR    read the queue (records, campaigns, the case work order)
     arer alerts set|set-group DIR ID STATUS        record decisions (one alert, or one whole mail)
     arer alerts stats DIR                  queue metrics (backlog, false alarms, response time)
-    arer alerts export DIR                 export the queue for a SIEM / SOAR
+    arer alerts export DIR                 export CONFIRMED phishing cases only (IOC gate)
+    arer alerts export-queue DIR           export the whole queue for SIEM triage
+    arer alerts iocs DIR [--raw]           structured IOCs of confirmed cases (csv/blocklist/misp)
     arer history migrate [--dry-run]       upgrade data/history.db (backup first, provenance)
     arer history import-dispositions DIR   import queue decisions as legacy_unverified
     arer watch DROPDIR [--once]            scan every mail that lands in a folder

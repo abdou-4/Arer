@@ -33,7 +33,8 @@ from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alert
                     to_json as alert_to_json, write_alert)
 from .campaign import build_campaigns, campaign_level, campaign_status
 from .disposition import STATUSES, build_disposition, disposition_path, read_disposition, write_disposition
-from .export import export_row, render as render_export
+from .export import export_row, is_confirmed_phishing, render as render_export
+from .iocs import collect_iocs, to_blocklist as iocs_to_blocklist, to_csv as iocs_to_csv, to_misp as iocs_to_misp
 from .metrics import queue_stats, render_queue_stats
 from .history.indicators import extract_indicators
 from .history.store import (HistoryStore, MigrationRequired, STATUS_TO_DISPOSITION, logic_hash,
@@ -42,7 +43,7 @@ from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate,
 from .models import Level
 from .pipeline import run_pipeline
 from .report import render_terminal, to_json
-from .util.defang import safe_text
+from .util.defang import clean, safe_text
 from .watcher import poll_once
 
 # The exit-code contract lives in src/arer/exitcodes.py (R0 remediation):
@@ -190,7 +191,9 @@ def _save(cfg, email, verdict, name) -> int:
 @click.option("--alerts", "alerts_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Folder for alert records (one `<alert_id>.alert.json` per alert-level email, "
                    "schema arer.alert.v1, see docs/alert-record.md).")
-@click.option("--raw", is_flag=True, help="Do not defang saved JSON (keeps real URLs/IPs).")
+@click.option("--raw", is_flag=True,
+              help="Do not defang the saved report JSON. Alert records (v2) always store the "
+                   "raw representation; defanging happens on output (R4.4).")
 @click.option("--store-sender", is_flag=True,
               help="Store the sender's plaintext address in alert records (v2 stores the "
                    "sender DOMAIN by default - R4.5 privacy default).")
@@ -282,7 +285,9 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
             # as a confirmed indicator because of errors alone.
             alert = build_alert(v, email, p.name, cfg, store_sender=store_sender)
             try:
-                write_alert(alert, alerts_dir, defang=not raw)
+                # R4.4: v2 records store the canonical (RAW) representation;
+                # defanging happens exactly once at output/serialization.
+                write_alert(alert, alerts_dir, defang=False)
             except AlertCollisionError as e:            # never overwrite another mail's record
                 click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
                 failed = True
@@ -336,9 +341,9 @@ def alerts_list(directory, level, status):
     if rows:
         click.echo(f"{'alert_id':<14}{'generated':<21}{'level':<18}{'score':>5}  {'status':<14}{'sha256':<14}{'from':<26}file")
         for a, st in rows:
-            sender = safe_text(a.scan.from_ or a.scan.from_domain, 60)
+            sender = clean(a.scan.from_ or a.scan.from_domain, 60)
             click.echo(f"{a.alert_id[:12]:<14}{a.generated_utc:<21}{a.verdict.level.value:<18}{a.verdict.score:>5}  "
-                       f"{st:<14}{a.verdict.sha256[:12]:<14}{sender:<26}{safe_text(a.source_file, 40)}")
+                       f"{st:<14}{a.verdict.sha256[:12]:<14}{sender:<26}{clean(a.source_file, 40)}")
     elif not bad:
         click.echo(f"no alert records in {directory}")
     if bad:
@@ -394,11 +399,76 @@ def alerts_set(directory, alert_id, status, note, config_dir):
               help="Write to this file instead of stdout.")
 @click.option("--raw", is_flag=True, help="Do not defang the exported IOCs (export is safe-by-default).")
 @click.option("--level", type=click.Choice([lv.value for lv in Level]), help="Only export this verdict level.")
+def alerts_export(directory, fmt, out_file, raw, level):
+    """Export CONFIRMED phishing cases for IOC consumption (R4.1): only cases
+    whose current decision is an ANALYST-originated `phishing` are included.
+    Unreviewed, benign, acknowledged and legacy/import/tool-provenance
+    records are counted in an exclusion summary - their indicators never
+    leave the queue. For the full queue view (SIEM triage), use
+    `alerts export-queue`."""
+    reads = read_alerts(directory)
+    bad = 0
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+    counts: dict[str, int] = {}
+    eligible = []
+    for r in reads:
+        if r.alert is None:
+            continue
+        try:
+            d = read_disposition(r.path, r.alert)
+        except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+            bad += 1
+            click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+            counts["unreadable"] = counts.get("unreadable", 0) + 1
+            continue
+        if not is_confirmed_phishing(r.alert, d):
+            if d is None:
+                counts["unreviewed"] = counts.get("unreviewed", 0) + 1
+            elif d.effective_provenance != "analyst":
+                counts["unverified_provenance"] = counts.get("unverified_provenance", 0) + 1
+            elif d.status == "benign":
+                counts["benign"] = counts.get("benign", 0) + 1
+            else:
+                counts["acknowledged"] = counts.get("acknowledged", 0) + 1
+            continue
+        if level and r.alert.verdict.level.value != level:
+            continue
+        eligible.append(export_row(r.alert, d, r.path.name))
+    text = render_export(eligible, fmt, defang=not raw)
+    if not eligible and not bad:
+        click.echo(f"no confirmed phishing cases in {directory}")
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(text, encoding="utf-8")
+    elif text:
+        click.echo(text, nl=False)
+    excluded = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()) if v) or "none"
+    click.echo(f"confirmed: {len(eligible)} case(s) exported; excluded (no IOCs taken): {excluded}",
+               err=True)
+    if bad:
+        click.echo(f"{bad} unreadable record(s)", err=True)
+    sys.exit(1 if bad else 0)
+
+
+@alerts.command("export-queue")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--format", "fmt", type=click.Choice(["jsonl", "csv"]), default="jsonl", show_default=True,
+              help="jsonl = one flat JSON object per alert (SIEM-friendly); csv = one row per alert.")
+@click.option("-o", "--out", "out_file", type=click.Path(dir_okay=False, path_type=Path),
+              help="Write to this file instead of stdout.")
+@click.option("--raw", is_flag=True, help="Do not defang the exported rows.")
+@click.option("--level", type=click.Choice([lv.value for lv in Level]), help="Only export this verdict level.")
 @click.option("--status", type=click.Choice([*STATUSES, "new"]),
               help="Only export alerts with this disposition ('new' = not handled yet).")
-def alerts_export(directory, fmt, out_file, raw, level, status):
-    """Flatten alert records (+ their dispositions) for SIEM/SOAR/spreadsheets,
-    one line (jsonl) or row (csv) per alert."""
+def alerts_export_queue(directory, fmt, out_file, raw, level, status):
+    """The CASE-REPORT export (explicit name, R4.1): every readable alert
+    record with its disposition, one line (jsonl) or row (csv) per alert -
+    the SIEM/SOAR triage view. This is NOT the IOC export: use
+    `alerts export` (analyst-confirmed only) or `alerts iocs` when
+    indicators must leave the queue."""
     reads = read_alerts(directory)
     bad = 0
     rows = []
@@ -430,6 +500,67 @@ def alerts_export(directory, fmt, out_file, raw, level, status):
         click.echo(text, nl=False)
     if bad:
         click.echo(f"{len(rows)} exported, {bad} unreadable", err=True)
+    sys.exit(1 if bad else 0)
+
+
+@alerts.command("iocs")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--format", "fmt", type=click.Choice(["csv", "blocklist", "misp"]), default="csv",
+              show_default=True, help="Indicator-specific format (R4.2).")
+@click.option("--kind", type=click.Choice(["all", "url", "domain", "sender_domain", "sha256"]),
+              default="all", show_default=True, help="Only these indicators (blocklist/csv).")
+@click.option("-o", "--out", "out_file", type=click.Path(dir_okay=False, path_type=Path),
+              help="Write to this file instead of stdout.")
+@click.option("--raw", is_flag=True,
+              help="Export LIVE (un-defanged) indicators. Without it every value is defanged "
+                   "- a blocklist of 'evil[.]com' lines is not actionable by accident.")
+def alerts_iocs(directory, fmt, kind, out_file, raw):
+    """Export the structured indicators of CONFIRMED phishing cases
+    (analyst-originated decisions only): urls, url domains, sender domains
+    and attachment hashes. Sender addresses never leave the queue (R4.5)."""
+    reads = read_alerts(directory)
+    bad = 0
+    counts: dict[str, int] = {}
+    confirmed = []
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+            continue
+        try:
+            d = read_disposition(r.path, r.alert)
+        except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+            bad += 1
+            click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+            continue
+        if is_confirmed_phishing(r.alert, d):
+            confirmed.append((r.alert, d))
+        elif d is None:
+            counts["unreviewed"] = counts.get("unreviewed", 0) + 1
+        elif d.effective_provenance != "analyst":
+            counts["unverified_provenance"] = counts.get("unverified_provenance", 0) + 1
+        elif d.status == "benign":
+            counts["benign"] = counts.get("benign", 0) + 1
+        else:
+            counts["acknowledged"] = counts.get("acknowledged", 0) + 1
+    iocs = collect_iocs(confirmed)
+    if fmt == "csv":
+        text = iocs_to_csv(iocs, raw=raw)
+    elif fmt == "blocklist":
+        text = iocs_to_blocklist(iocs, kind=None if kind == "all" else kind, raw=raw)
+    else:
+        text = iocs_to_misp(iocs, raw=raw)
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(text, encoding="utf-8")
+    elif text:
+        click.echo(text, nl=False)
+    skipped = getattr(collect_iocs, "last_skipped_no_block", 0)
+    excluded = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()) if v) or "none"
+    click.echo(f"confirmed cases: {len(confirmed)} ({skipped} skipped: no structured indicator block - "
+               f"v1 record); indicators: {len(iocs)}; excluded (no IOCs taken): {excluded}", err=True)
+    if bad:
+        click.echo(f"{bad} unreadable record(s)", err=True)
     sys.exit(1 if bad else 0)
 
 
@@ -477,7 +608,7 @@ def alerts_campaigns(directory, level, status):
         click.echo(f"{'sha256':<14}{'seen':>5}  {'level':<18}{'score':>5}  "
                    f"{'first':<21}{'last':<21}{'from':<26}status")
         for members, lvl, score, st in rows:
-            sender = safe_text(members[-1][0].scan.from_ or members[-1][0].scan.from_domain, 60)
+            sender = clean(members[-1][0].scan.from_ or members[-1][0].scan.from_domain, 60)
             click.echo(f"{members[0][0].verdict.sha256[:12]:<14}{len(members):>5}  {lvl.value:<18}{score:>5}  "
                        f"{members[0][0].generated_utc:<21}{members[-1][0].generated_utc:<21}{sender:<26}{st}")
     elif not bad:

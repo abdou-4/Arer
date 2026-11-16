@@ -180,7 +180,7 @@ def test_real_produced_record_reads_back(alert_dir):
     a = reads[0].alert
     assert a is not None
     assert a.schema_ == "arer.alert.v2"
-    assert a.source_file == "salad[.]eml"
+    assert a.source_file == "salad.eml"
     assert a.verdict.level.value in {"SUSPICIOUS", "LIKELY_PHISHING", "MALICIOUS"}
     assert a.verdict.sha256 and len(a.verdict.sha256) == 64
 
