@@ -223,10 +223,22 @@ Two extra lines can appear:
 
 ### Exit codes (for scripts)
 
-| Command | 0 | 1 | 2 |
-|---|---|---|---|
-| `scan` | all CLEAN, SUSPICIOUS or INSUFFICIENT_DATA | a file could not be processed | at least one LIKELY_PHISHING or MALICIOUS |
-| `parse` | all parsed | some files failed | input path missing |
+`scan` exits with the verdict's code for the worst outcome in the batch; `parse` keeps 0/1/2.
+
+| Code | `scan` meaning |
+|---:|---|
+| 0 | `CLEAN` |
+| 3 | `SUSPICIOUS` (alert) |
+| 4 | `LIKELY_PHISHING` (alert) |
+| 5 | `MALICIOUS` (alert) |
+| 6 | `INSUFFICIENT_DATA` - a no-decision, **not** an alert |
+| 7 | `ANALYSIS_ERROR` - analyzers failed, result incomplete |
+| 1 | a file could not be processed |
+| 2 | usage error (bad flags) |
+
+`parse`: 0 all parsed, 1 some files failed, 2 input path missing.
+
+Match exact codes (or the allowlist in `arer.exitcodes`: `VERDICT_EXITS` / `ALERT_EXITS`); never "exit >= 3", because 6 is a no-decision and 7 is not a verdict.
 
 ```bash
 arer scan data/samples/phish -q || echo "phishing found or error"

@@ -6,9 +6,14 @@ arer - local phishing triage.
     arer scan  data/samples/mail.eml -q
 
 Two commands, that's all. `scan` parses in memory, so you never run two steps.
-Exit codes
+Exit codes (frozen table, see docs/cli-contract.md and src/arer/exitcodes.py)
     parse : 0 ok | 1 some files failed | 2 input missing
-    scan  : 0 clean/suspicious | 2 likely phishing or malicious found | 1 a file failed
+    scan  : 0 CLEAN | 3 SUSPICIOUS | 4 LIKELY_PHISHING | 5 MALICIOUS
+            6 INSUFFICIENT_DATA (no decision, not an alert)
+            7 ANALYSIS_ERROR (analyzers failed, result incomplete)
+            1 a file failed | 2 usage error
+    Scripts must match exact codes (or the allowlist in arer.exitcodes),
+    never "exit >= 3": code 6 is a no-decision and code 7 is not a verdict.
 """
 from __future__ import annotations
 
@@ -20,6 +25,8 @@ from pathlib import Path
 import click
 
 from .config import ConfigError, load_config
+from .exitcodes import (ALERT_EXITS, ANALYSIS_ERROR_EXIT, EXIT_CODES, EXIT_SEVERITY,
+                        exit_code_for, is_alert_exit)
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
 from .campaign import build_campaigns, campaign_level, campaign_status
@@ -35,23 +42,10 @@ from .report import render_terminal, to_json
 from .util.defang import safe_text
 from .watcher import poll_once
 
-# Exit codes for `arer scan` (contract in docs/cli-contract.md). Scripts should
-# treat anything >= 3 as an alert; 2 stays Click's usage-error convention.
-EXIT_CODES = {
-    Level.CLEAN: 0,
-    Level.SUSPICIOUS: 3,
-    Level.LIKELY_PHISHING: 4,
-    Level.MALICIOUS: 5,
-    Level.INSUFFICIENT_DATA: 6,
-}
-# "Worst wins" order across a batch: a verdict outranks a load failure (1),
-# which outranks clean (0).
-_EXIT_SEVERITY = {code: rank for rank, code in enumerate([0, 1, 6, 3, 4, 5])}
-
-
-def exit_code_for(level: Level) -> int:
-    """Exit code for one scanned file; see docs/cli-contract.md."""
-    return EXIT_CODES[level]
+# The exit-code contract lives in src/arer/exitcodes.py (R0 remediation):
+# one frozen table, an explicit allowlist, and the batch severity order.
+_EXIT_SEVERITY = EXIT_SEVERITY
+__all__ = ["main", "exit_code_for"]   # exit_code_for is re-exported for callers/tests
 
 
 def collect(target: Path, recursive: bool, suffixes: set[str]) -> list[Path]:
@@ -213,7 +207,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
 
     if failed:
         codes.append(1)
-    sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)
+    sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)  # noqa: RUF015 - sys.exit wants the code, not the arg
 
 
 # --------------------------------------------------------------------------- #
