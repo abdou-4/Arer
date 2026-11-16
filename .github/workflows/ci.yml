@@ -5,26 +5,23 @@ on:
     branches: [main]
   pull_request:
 
-# Why the odd matrix:
+# Why this matrix exists:
 # CPython's June 2025 html.parser hardening (HTML5 CDATA conformance, following
-# CVE-2025-6069) makes HTMLParser treat the content of noframes/iframe/noembed/xmp
-# as raw text. Arer's tag-salad detection and two tests in tests/test_phase5c.py
-# rely on seeing inside those elements, so every official CPython from ~3.13.6 /
-# 3.12.11 onward fails exactly 2 tests (test_tag_salad_is_detected, test_counters).
-# Note: uv's standalone Python builds carry this backport even for old patch
-# releases, so the suite is pinned to official CPython builds via setup-python,
-# and uv only syncs dependencies against that exact interpreter.
-# - Job "3.13.5": pinned official build, the environment the suite is verified
-#   green on (310 tests, 0 failures). This job is the required signal and runs
-#   the full suite with no exclusions.
-# - Job "3.13 (latest)": runs the suite minus the two known-broken tests, so
-#   any *new* regression is still a hard red. The two known-broken tests run
-#   separately in a sentinel step that reports via workflow annotations
-#   (::warning:: when they fail as expected, ::notice:: once they pass). This
-#   keeps the whole run green without hiding the known breakage.
-# TODO: make parse_html robust across both parser behaviors (detection-baseline
-# change -> needs its own measured commit), then drop the pin, the deselect
-# logic and the sentinel step.
+# CVE-2025-6069) made HTMLParser treat the content of noframes/iframe/noembed/
+# xmp as raw text, which broke Arer's tag-salad detection and 2 tests on every
+# interpreter from ~3.13.6 / 3.12.11 onward. The detection fix lives in
+# src/arer/util/html.py (_Reader.set_cdata_mode override, commit b4b01bd) and
+# the suite now passes identically on pre- and post-hardening parsers.
+# Note: uv's standalone Python builds carry the hardening backport even for old
+# patch releases, so CI runs official CPython builds via setup-python, and uv
+# only syncs dependencies against that exact interpreter.
+# - Job "3.13.5": pinned official build, kept as the stable reference.
+# - Job "3.13 (latest)": full suite, no exclusions. Since commit b4b01bd
+#   (fix(html): keep detection stable across the CVE-2025-6069 html.parser
+#   hardening) the suite passes identically on pre- and post-hardening
+#   parsers, so no deselect/sentinel machinery is needed anymore.
+# TODO: none pending for the parser - re-open this only if CPython changes
+# html.parser behavior again in a way the suite does not cover.
 
 jobs:
   test:
@@ -36,18 +33,8 @@ jobs:
         include:
           - python-version: "3.13.5"
             os: ubuntu-24.04        # 3.13.5 has no build for ubuntu-latest (26.04)
-            allow_known_broken: false
           - python-version: "3.13"
             os: ubuntu-latest
-            allow_known_broken: true
-    env:
-      # Tests that depend on the pre-hardening html.parser CDATA behavior (see
-      # the CVE-2025-6069 note above). On interpreters where they are known to
-      # fail they are deselected from the main run and executed separately as a
-      # visible sentinel step instead of failing the whole job.
-      KNOWN_BROKEN: >-
-        tests/test_phase5c.py::test_tag_salad_is_detected
-        tests/test_phase5c.py::test_counters
     steps:
       - uses: actions/checkout@v4
 
@@ -90,28 +77,4 @@ jobs:
         run: uv sync --frozen --python "$(command -v python3.13)"
 
       - name: Run tests
-        run: |
-          if [ "${{ matrix.allow_known_broken }}" = "true" ]; then
-            deselect_args=()
-            for t in $KNOWN_BROKEN; do
-              deselect_args+=(--deselect "$t")
-            done
-            uv run pytest -q "${deselect_args[@]}"
-          else
-            # Pinned job: full suite, no exclusions - this is the required
-            # signal that everything works on the verified-green interpreter.
-            uv run pytest -q
-          fi
-
-      - name: Known-breakage sentinel (CVE-2025-6069 html.parser hardening)
-        if: matrix.allow_known_broken
-        run: |
-          pytest_args=()
-          for t in $KNOWN_BROKEN; do
-            pytest_args+=("$t")
-          done
-          if uv run pytest -q "${pytest_args[@]}"; then
-            echo "::notice title=html.parser sentinel green::The known-broken tests now pass on this interpreter. Consider dropping the 3.13.5 pin (see TODO in ci.yml)."
-          else
-            echo "::warning title=html.parser sentinel red (expected)::The two CVE-2025-6069-hardening tests fail on this interpreter as tracked in the ci.yml header. Full-suite correctness is covered by the required 3.13.5 job."
-          fi
+        run: uv run pytest -q
