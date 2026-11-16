@@ -235,7 +235,7 @@ def test_label_a_file_then_catch_its_sibling(tmp_path, env):
     assert r.exit_code == 0 and "- -> phish" in r.output and "will be flagged" in r.output
     g = tmp_path / "second.eml"; g.write_bytes(MAIL.replace(b"Subject: file", b"Subject: other").replace(b"/ABC/", b"/XYZ/"))
     r = run(env, "scan", str(g))
-    assert r.exit_code == 0 and "history.known_bad_sender" in r.output
+    assert r.exit_code >= 3 and "history.known_bad_sender" in r.output   # SUSPICIOUS or higher -> alert exit code
 
 def test_label_by_sha_prefix_and_clear(tmp_path, env):
     f = tmp_path / "m.eml"; f.write_bytes(MAIL)

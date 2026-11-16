@@ -4,8 +4,11 @@ from email.message import EmailMessage
 import pytest
 from click.testing import CliRunner
 
-from arer.cli import main
+from arer.cli import exit_code_for, main
+from arer.config import load_config
 from arer.loader import LoadError, load_any
+from arer.models import Level
+from arer.pipeline import run_pipeline
 
 
 @pytest.fixture
@@ -23,6 +26,10 @@ def eml(tmp_path):
     return p
 
 
+def _level_of(path):
+    return run_pipeline(load_any(path), load_config()).level
+
+
 def test_load_any_eml_reads_attachment_and_magic(eml):
     e = load_any(eml)
     assert e.from_domain == "paypa1-secure.com" and e.reply_to_domain == "evil.example"
@@ -36,9 +43,18 @@ def test_load_any_rejects_unknown_type(tmp_path):
         load_any(f)
 
 
-def test_scan_eml_flags_phishing_and_exits_2(eml):
+def test_exit_code_mapping_is_frozen():
+    assert exit_code_for(Level.CLEAN) == 0
+    assert exit_code_for(Level.SUSPICIOUS) == 3
+    assert exit_code_for(Level.LIKELY_PHISHING) == 4
+    assert exit_code_for(Level.MALICIOUS) == 5
+    assert exit_code_for(Level.INSUFFICIENT_DATA) == 6
+
+def test_scan_eml_flags_phishing_and_alert_exit_code(eml):
+    level = _level_of(eml)
+    assert level in {Level.LIKELY_PHISHING, Level.MALICIOUS}
     r = CliRunner().invoke(main, ["scan", str(eml)])
-    assert r.exit_code == 2                                   # LIKELY_PHISHING / MALICIOUS -> 2
+    assert r.exit_code == exit_code_for(level) >= 4          # scripts: >= 3 means alert
     for finding in ("sender.reply_to_mismatch", "attachment.executable", "url.ip_host"):
         assert finding in r.output
 
@@ -58,7 +74,7 @@ def test_parse_then_scan_json(eml, tmp_path):
     r = CliRunner().invoke(main, ["parse", str(eml), "-o", str(out)])
     assert r.exit_code == 0 and (out / "phish.eml.json").is_file()
     r = CliRunner().invoke(main, ["scan", str(out / "phish.eml.json"), "-q"])
-    assert r.exit_code == 2 and "phish.eml.json" in r.output
+    assert r.exit_code == exit_code_for(_level_of(out / "phish.eml.json")) and "phish.eml.json" in r.output
 
 
 def test_scan_folder_writes_reports_and_skips_them(eml, tmp_path):
@@ -71,10 +87,15 @@ def test_scan_folder_writes_reports_and_skips_them(eml, tmp_path):
 
 def test_json_flag_rejects_many(eml, tmp_path):
     r = CliRunner().invoke(main, ["scan", str(eml), str(eml), "--json", str(tmp_path / "x.json")])
-    assert r.exit_code == 2
+    assert r.exit_code == 2                                   # usage error, not a verdict
+
+def test_scan_without_arguments_is_usage_error(eml):
+    r = CliRunner().invoke(main, ["scan"])
+    assert r.exit_code == 2                                   # Click usage convention stays 2
 
 
 def test_bad_file_does_not_stop_batch(eml, tmp_path):
     bad = tmp_path / "bad.json"; bad.write_text("{nope")
     r = CliRunner().invoke(main, ["scan", str(bad), str(eml), "-q"])
-    assert "phish.eml" in r.output and r.exit_code == 2     # phishing found outranks the failed file
+    assert "phish.eml" in r.output
+    assert r.exit_code == exit_code_for(_level_of(eml)) > 1   # verdict severity outranks the load error

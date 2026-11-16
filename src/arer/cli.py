@@ -28,7 +28,23 @@ from .pipeline import run_pipeline
 from .report import render_terminal, to_json
 from .util.defang import safe_text
 
-BAD = {Level.LIKELY_PHISHING, Level.MALICIOUS}
+# Exit codes for `arer scan` (contract in docs/cli-contract.md). Scripts should
+# treat anything >= 3 as an alert; 2 stays Click's usage-error convention.
+EXIT_CODES = {
+    Level.CLEAN: 0,
+    Level.SUSPICIOUS: 3,
+    Level.LIKELY_PHISHING: 4,
+    Level.MALICIOUS: 5,
+    Level.INSUFFICIENT_DATA: 6,
+}
+# "Worst wins" order across a batch: a verdict outranks a load failure (1),
+# which outranks clean (0).
+_EXIT_SEVERITY = {code: rank for rank, code in enumerate([0, 1, 6, 3, 4, 5])}
+
+
+def exit_code_for(level: Level) -> int:
+    """Exit code for one scanned file; see docs/cli-contract.md."""
+    return EXIT_CODES[level]
 
 
 def collect(target: Path, recursive: bool, suffixes: set[str]) -> list[Path]:
@@ -152,7 +168,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, co
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    worst, failed = 0, False
+    codes, failed = [], False
     for p in paths:
         try:
             email = load_any(p, cfg, trust=trust)
@@ -178,10 +194,11 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, co
             json_path.write_text(report, encoding="utf-8")
         if out_dir:
             (out_dir / f"{p.name}.report.json").write_text(report, encoding="utf-8")
-        if v.level in BAD:
-            worst = 2
+        codes.append(EXIT_CODES[v.level])
 
-    sys.exit(worst or (1 if failed else 0))
+    if failed:
+        codes.append(1)
+    sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)
 
 
 # --------------------------------------------------------------------------- #
