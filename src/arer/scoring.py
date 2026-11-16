@@ -39,11 +39,15 @@ def compute(findings: list[Finding], cfg: Config, email: Email | None = None,
         if f.id not in best or pts > best[f.id][1]:
             best[f.id] = (f.category.value, pts)
 
-    # 3: per-category sum, then cap
+    # 3: per-category sum, then cap. Key order is made deterministic
+    # (alphabetical): analyzers run in threads and finish in varying order,
+    # so insertion order here would otherwise leak into JSON output
+    # (verdict.by_category and the Phase 6.1 alert record) and make
+    # byte-comparable records impossible. Values are unchanged.
     raw: dict[str, float] = {}
     for cat, pts in best.values():
         raw[cat] = raw.get(cat, 0) + pts
-    by_cat = {c: min(round(p), cfg.cap_for(c)) for c, p in raw.items()}
+    by_cat = {c: min(round(p), cfg.cap_for(c)) for c, p in sorted(raw.items())}
 
     # 4-5
     score = max(0, min(100, sum(by_cat.values())))

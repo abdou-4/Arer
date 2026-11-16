@@ -20,6 +20,7 @@ import click
 
 from .config import ConfigError, load_config
 from .evaluate import _label_of, evaluate, evaluate_history, render
+from .alert import build_alert, is_alert_level, to_json as alert_to_json
 from .history.indicators import extract_indicators
 from .history.store import HistoryStore, logic_hash
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
@@ -141,13 +142,16 @@ def _save(cfg, email, verdict, name) -> int:
               help="Save the report for ONE email to this file.")
 @click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Save one <name>.report.json per email in this folder.")
+@click.option("--alerts", "alerts_dir", type=click.Path(file_okay=False, path_type=Path),
+              help="Save one <name>.alert.json per alert-level email (schema arer.alert.v1, "
+                   "see docs/alert-record.md) in this folder.")
 @click.option("--raw", is_flag=True, help="Do not defang saved JSON (keeps real URLs/IPs).")
 @click.option("--skip", multiple=True, help="Analyzer name to skip (repeatable).")
 @click.option("--save/--no-save", default=None,
               help="Remember this scan in your history (default: config/history.yaml auto_save, normally off).")
 @click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
               help="Config folder (default: ./config or $PHISHSCOPE_CONFIG).")
-def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, config_dir):
+def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, skip, save, config_dir):
     """Analyze .eml/.msg/.json file(s) or folder(s) and print a verdict."""
     try:
         cfg = load_config(config_dir)
@@ -167,6 +171,8 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, co
         raise click.UsageError("--json saves one report; use --out DIR for many emails")
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
+    if alerts_dir:
+        alerts_dir.mkdir(parents=True, exist_ok=True)
 
     codes, failed = [], False
     for p in paths:
@@ -194,6 +200,9 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, co
             json_path.write_text(report, encoding="utf-8")
         if out_dir:
             (out_dir / f"{p.name}.report.json").write_text(report, encoding="utf-8")
+        if alerts_dir and is_alert_level(v.level):
+            alert = build_alert(v, email, p.name, cfg)
+            (alerts_dir / f"{p.name}.alert.json").write_text(alert_to_json(alert, defang=not raw), encoding="utf-8")
         codes.append(EXIT_CODES[v.level])
 
     if failed:

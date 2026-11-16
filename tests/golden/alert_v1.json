@@ -1,0 +1,86 @@
+{
+  "schema": "arer.alert.v1",
+  "alert_id": "ffffffffffffffffffffffffffffffff",
+  "generated_utc": "2026-11-17T09:30:00Z",
+  "source_file": "alert[.]eml",
+  "logic_hash": "9079e784c5068ae6",
+  "scan": {
+    "from": "news[@]discord[.]com",
+    "message_id": "<20261101.1[@]x[.]com>",
+    "date": "Sun, 01 Nov 2026 10:00:00 +0000"
+  },
+  "verdict": {
+    "sha256": "",
+    "subject": "Your account is locked",
+    "score": 29,
+    "level": "SUSPICIOUS",
+    "by_category": {
+      "auth": 28,
+      "headers": 1
+    },
+    "findings": [
+      {
+        "id": "auth.spf_fail",
+        "category": "auth",
+        "summary": "SPF failed: sender IP not authorised",
+        "evidence": {
+          "authserv": "mx[.]corp[.]test",
+          "spf": "fail",
+          "dkim": "none",
+          "dmarc": "fail",
+          "dmarc_policy": null,
+          "header": "mx[.]corp[.]test; spf=fail smtp[.]mailfrom=x[.]com; dkim=none; dmarc=fail header[.]from=x[.]com"
+        },
+        "weight": 15,
+        "confidence": 1.0,
+        "source": "rule"
+      },
+      {
+        "id": "auth.dmarc_fail",
+        "category": "auth",
+        "summary": "DMARC failed for the From domain",
+        "evidence": {
+          "authserv": "mx[.]corp[.]test",
+          "spf": "fail",
+          "dkim": "none",
+          "dmarc": "fail",
+          "dmarc_policy": null,
+          "header": "mx[.]corp[.]test; spf=fail smtp[.]mailfrom=x[.]com; dkim=none; dmarc=fail header[.]from=x[.]com"
+        },
+        "weight": 10,
+        "confidence": 1.0,
+        "source": "rule"
+      },
+      {
+        "id": "auth.dkim_none",
+        "category": "auth",
+        "summary": "Message is not DKIM-signed",
+        "evidence": {
+          "authserv": "mx[.]corp[.]test",
+          "spf": "fail",
+          "dkim": "none",
+          "dmarc": "fail",
+          "dmarc_policy": null,
+          "header": "mx[.]corp[.]test; spf=fail smtp[.]mailfrom=x[.]com; dkim=none; dmarc=fail header[.]from=x[.]com"
+        },
+        "weight": 3,
+        "confidence": 1.0,
+        "source": "rule"
+      },
+      {
+        "id": "headers.msgid_domain_mismatch",
+        "category": "headers",
+        "summary": "Message-ID domain x[.]com differs from From domain discord[.]com",
+        "evidence": {
+          "message_id_domain": "x[.]com",
+          "from_domain": "discord[.]com"
+        },
+        "weight": 2,
+        "confidence": 0.5,
+        "source": "rule"
+      }
+    ],
+    "overridden_by": null,
+    "analyzer_errors": []
+  }
+}
