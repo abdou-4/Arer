@@ -1,0 +1,4 @@
+path,group_id,dataset,license,reference,collection_date
+phish/paypal-2026-03/login-verify.eml,camp-paypal-2026-03,my-corpus,,,
+phish/paypal-2026-03/password-reset.eml,camp-paypal-2026-03,my-corpus,,,
+legit/newsletters/shop-digest.eml,,my-corpus,,,
