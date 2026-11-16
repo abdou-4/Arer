@@ -211,6 +211,15 @@ def test_alert_queue_campaigns_and_set_group(tmp_path, env):
     assert " phishing  " in after.output
 
 
+def test_watch_flow_runs_one_pass_and_archives(tmp_path, env):
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    mail(drop / "m.eml")
+    r = run(env, f"{item('Watch a mail drop')}\n{drop}\ny\n{tmp_path / 'queue'}\ny\n0\n")
+    assert "arer watch" in r.output and "--once" in r.output
+    assert (drop / "handled" / "m.eml").is_file()
+
+
 # -------------------------------- expandability (AI) ------------------------------ #
 def test_a_new_action_appears_with_the_next_number(monkeypatch, env):
     seen = []

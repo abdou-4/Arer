@@ -343,6 +343,19 @@ def alerts_flow() -> None:
             run_cli(args)
 
 
+@register_action("Watch a mail drop", "Keep scanning a folder for new mail")
+def watch_flow() -> None:
+    drop = ask_path("Folder to watch (mail lands here, e.g. from a SOAR or a sync)", want="folder")
+    if drop is None:
+        return
+    args = ["watch", str(drop)]
+    if click.confirm("  Save alert records for alert-level mail (your triage queue)?", default=True):
+        args += ["--alerts", click.prompt("  Folder for the alert records", default="alerts")]
+    if click.confirm("  Run one pass only? (answer no to keep watching until Ctrl-C)", default=True):
+        args.append("--once")
+    run_cli(args)
+
+
 @register_action("Blocklists", "Download or check phishing blocklists")
 def feeds_flow() -> None:
     what = ask_choice("Blocklists:", [("status", "Show what is loaded and how old it is"),
@@ -375,6 +388,8 @@ def help_flow() -> None:
     arer history list|stats|import|forget
     arer alerts list|campaigns|show DIR    read the alert queue (records, campaigns)
     arer alerts set|set-group DIR ID STATUS        record decisions (one alert, or one whole mail)
+    arer alerts export DIR                 export the queue for a SIEM / SOAR
+    arer watch DROPDIR [--once]            scan every mail that lands in a folder
     arer feeds status|update       local blocklists (update needs internet)
     arer parse PATH                convert emails to JSON
     arer --help                    every option

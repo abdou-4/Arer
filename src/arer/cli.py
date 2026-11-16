@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -31,6 +32,7 @@ from .models import Level
 from .pipeline import run_pipeline
 from .report import render_terminal, to_json
 from .util.defang import safe_text
+from .watcher import poll_once
 
 # Exit codes for `arer scan` (contract in docs/cli-contract.md). Scripts should
 # treat anything >= 3 as an alert; 2 stays Click's usage-error convention.
@@ -421,6 +423,45 @@ def alerts_set_group(directory, sha256, status, note):
         write_disposition(build_disposition(a.alert_id, status, mail_sha256=c.mail_sha256, note=note or ""), p)
     click.echo(f"{c.mail_sha256[:12]}  {len(c.alerts)} alert(s) marked {status}"
                + (f"  ({safe_text(note, 120)})" if note else ""))
+
+
+# --------------------------------------------------------------------------- #
+# arer watch   (mail drop folder -> fresh scan subprocess per mail)
+# --------------------------------------------------------------------------- #
+@main.command("watch")
+@click.argument("drop", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--alerts", "alerts_dir", type=click.Path(file_okay=False, path_type=Path),
+              help="Folder for alert records (same as scan --alerts; the subprocess writes them).")
+@click.option("--every", "interval", type=float, default=5.0, show_default=True,
+              help="Seconds between passes (continuous mode).")
+@click.option("--timeout", "timeout", type=float, default=60.0, show_default=True,
+              help="Seconds one mail may take before its scan is killed.")
+@click.option("--skip", multiple=True, help="Analyzer name to turn off (same as scan).")
+@click.option("--once", is_flag=True, help="One pass over the folder, then exit (cron-friendly).")
+def watch_cmd(drop, alerts_dir, interval, timeout, skip, once):
+    """Watch a mail drop folder: every mail file that appears is scanned by a
+    fresh `arer scan` subprocess (killed if it hangs), then archived to
+    handled/ or failed/ inside DROP - never overwritten, never deleted.
+
+    With --once, one pass runs and the command exits (1 if any mail failed).
+    Without it, the watcher loops until Ctrl-C."""
+    def show(outcomes):
+        for o in outcomes:
+            line = f"{o.path.name}  {safe_text(o.detail, 120)}  -> {o.dest.relative_to(drop)}"
+            click.echo(click.style(line, fg="red") if o.failed else line)
+    if once:
+        outcomes = poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip)
+        show(outcomes)
+        if any(o.failed for o in outcomes):
+            sys.exit(1)
+        return
+    click.echo(f"watching {drop} every {interval:g}s (Ctrl-C to stop)")
+    try:
+        while True:
+            show(poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip))
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("\nstopped.")
 
 
 # --------------------------------------------------------------------------- #
