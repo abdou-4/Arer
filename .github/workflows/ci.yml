@@ -49,14 +49,30 @@ jobs:
         # publish floating major tags (v10 does not exist), only vX.Y.Z tags.
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
 
-      - name: Verify the exact interpreter
+      - name: Verify the selected interpreter
         run: |-
           v="$(python3.13 -V)"
           echo "interpreter: $v"
-          if [ "$v" != "Python ${{ matrix.python-version }}" ]; then
-            echo "::error::setup-python did not provide ${{ matrix.python-version }}; got $v"
-            exit 1
-          fi
+          want="${{ matrix.python-version }}"
+          got="${v#Python }"
+          case "$want" in
+            *.*.*)
+              # Exact pin (e.g. 3.13.5): the suite is only verified green on
+              # this build, so require a byte-for-byte match.
+              if [ "$got" != "$want" ]; then
+                echo "::error::expected exactly $want; got $got"
+                exit 1
+              fi
+              ;;
+            *)
+              # Floating spec (e.g. 3.13): setup-python resolves it to the
+              # newest available patch build, so only require major.minor.
+              if [ "${got%.*}" != "$want" ]; then
+                echo "::error::expected $want.x; got $got"
+                exit 1
+              fi
+              ;;
+          esac
 
       - name: Sync dependencies against the selected interpreter
         run: uv sync --frozen --python "$(command -v python3.13)"
