@@ -3,23 +3,26 @@ evaluate.py - measure the detector on labeled samples, so tuning is evidence, no
 
 Labels come from folders: anything under a folder named phish/phishing/malicious is phishing,
 under legit/ham/benign/clean is legitimate. An optional <root>/labels.csv (columns: filename,label)
-overrides the folder for single files, for example a sample you found to be mislabeled.
+overrides folder labels. Prefer relative paths; filename-only overrides are accepted only when
+the basename is unique in the dataset. An optional <root>/manifest.csv records campaign groups
+and dataset provenance.
 
 Reports, at each severity level and across a score sweep:
   detection rate (phishing caught), false-alarm rate (legit flagged), precision,
   the phishing you MISSED, the legit mail you FLAGGED, and which findings fire on which class.
 
---only dev|test uses a stable 80/20 split (by file hash). Tune on dev, check on test now and
-then, so your weights do not simply memorise your samples.
+--only dev|test uses a stable 80/20 split. A manifest group_id keeps campaign siblings together;
+samples without a group_id retain the file-hash split. Tune on dev, check on test now and then.
 """
 from __future__ import annotations
 
+import hashlib
 import csv
 import math
 import statistics
 from collections import Counter
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 
 from .config import Config
 from .history.store import HistoryStore, logic_hash, rescore
@@ -40,10 +43,18 @@ class Result:
     label: str                 # "phish" | "legit"
     verdict: Verdict
     source: str = ""           # folder it came from, e.g. "legit/modern" or "legit/archive"
+    group_id: str | None = None
+    dataset: str = ""
+    license: str = ""
+    reference: str = ""
+    collection_date: str = ""
 
     @property
     def split(self) -> str:
-        sha = self.verdict.sha256
+        # Keep every known campaign group on one side of the split. Samples
+        # without a group retain the original content-hash assignment.
+        sha = (hashlib.sha256(self.group_id.encode("utf-8")).hexdigest()
+               if self.group_id else self.verdict.sha256)
         return "test" if sha and int(sha[:8], 16) % 5 == 0 else "dev"
 
 
@@ -54,11 +65,23 @@ class Evaluation:
     unlabeled: int = 0
     duplicates: int = 0
     stale: int = 0              # history rows made by older analyzer logic or lists
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ManifestEntry:
+    group_id: str = ""
+    dataset: str = ""
+    license: str = ""
+    reference: str = ""
+    collection_date: str = ""
 
 
 def _label_of(path: Path, root: Path, overrides: dict[str, str]) -> str | None:
-    if path.name in overrides:
-        return overrides[path.name]
+    rel = path.relative_to(root).as_posix()
+    for key in (f"path:{rel}", f"filename:{path.name}", path.name):
+        if key in overrides:
+            return overrides[key]
     for part in path.relative_to(root).parts[:-1]:
         low = part.lower()
         if low in PHISH_DIRS:
@@ -68,15 +91,92 @@ def _label_of(path: Path, root: Path, overrides: dict[str, str]) -> str | None:
     return None
 
 
-def _read_overrides(root: Path) -> dict[str, str]:
+def _read_overrides(root: Path, files: list[Path] | None = None,
+                    warnings: list[str] | None = None) -> dict[str, str]:
     f = root / "labels.csv"
     out: dict[str, str] = {}
+    warnings = warnings if warnings is not None else []
+    name_counts = Counter(p.name for p in (files or []))
+    available_paths = {p.relative_to(root).as_posix() for p in (files or [])}
     if f.is_file():
-        with f.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
+        with f.open(newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            columns = set(reader.fieldnames or [])
+            if "label" not in columns or not columns.intersection({"path", "filename"}):
+                warnings.append("labels.csv needs a 'label' column and either 'path' or 'filename'")
+                return out
+            duplicate_keys: set[str] = set()
+            for line, row in enumerate(reader, start=2):
                 lab = (row.get("label") or "").strip().lower()
-                if row.get("filename") and lab in ("phish", "legit"):
-                    out[row["filename"].strip()] = lab
+                if lab not in ("phish", "legit"):
+                    warnings.append(f"labels.csv row {line}: invalid label; override ignored")
+                    continue
+                raw_path = (row.get("path") or "").strip()
+                raw_name = (row.get("filename") or "").strip()
+                if raw_path:
+                    rel = PurePosixPath(raw_path)
+                    if (rel.is_absolute() or "\\" in raw_path
+                            or any(part in ("", ".", "..") for part in raw_path.split("/"))):
+                        warnings.append(f"labels.csv row {line}: path must be a safe relative path; override ignored")
+                        continue
+                    if files is not None and rel.as_posix() not in available_paths:
+                        warnings.append(f"labels.csv row {line}: path '{rel.as_posix()}' not found; override ignored")
+                        continue
+                    key = f"path:{rel.as_posix()}"
+                elif raw_name:
+                    if "/" in raw_name or "\\" in raw_name or raw_name in (".", ".."):
+                        warnings.append(f"labels.csv row {line}: filename must be a basename; use the path column")
+                        continue
+                    if name_counts.get(raw_name, 0) > 1:
+                        warnings.append(f"labels.csv row {line}: filename '{raw_name}' is ambiguous; use a relative path")
+                        continue
+                    key = f"filename:{raw_name}"
+                else:
+                    warnings.append(f"labels.csv row {line}: missing path/filename; override ignored")
+                    continue
+                if key in duplicate_keys:
+                    continue
+                if key in out:
+                    out.pop(key, None)
+                    duplicate_keys.add(key)
+                    warnings.append(f"labels.csv row {line}: duplicate override; all rows for this target are ignored")
+                    continue
+                out[key] = lab
+    return out
+
+
+def _read_manifest(root: Path) -> dict[str, ManifestEntry]:
+    """Read optional dataset metadata and campaign IDs, keyed by root-relative path.
+
+    Invalid manifests fail closed: silently falling back to per-message splitting
+    could put campaign siblings in both dev and test.
+    """
+    f = root / "manifest.csv"
+    if not f.is_file():
+        return {}
+    out: dict[str, ManifestEntry] = {}
+    with f.open(newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if "path" not in (reader.fieldnames or []):
+            raise ValueError("manifest.csv needs a 'path' column")
+        for line, row in enumerate(reader, start=2):
+            raw_path = (row.get("path") or "").strip()
+            if not raw_path:
+                continue
+            rel = PurePosixPath(raw_path)
+            if (rel.is_absolute() or "\\" in raw_path
+                    or any(part in ("", ".", "..") for part in raw_path.split("/"))):
+                raise ValueError(f"row {line}: path must be a safe relative path using '/' separators")
+            key = rel.as_posix()
+            if key in out:
+                raise ValueError(f"row {line}: duplicate path '{key}'")
+            out[key] = ManifestEntry(
+                group_id=(row.get("group_id") or "").strip(),
+                dataset=(row.get("dataset") or "").strip(),
+                license=(row.get("license") or "").strip(),
+                reference=(row.get("reference") or "").strip(),
+                collection_date=(row.get("collection_date") or "").strip(),
+            )
     return out
 
 
@@ -106,11 +206,24 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
     skip = set(skip or ())
     if not include_history:
         skip.add("history")        # your own history would leak campaign siblings into the test
-    overrides = _read_overrides(root)
     skip_dirs = {d.lower() for d in (skip_dirs or set())}
     files = sorted(p for p in root.rglob("*") if is_mail_candidate(p)
                    and not ({x.lower() for x in p.relative_to(root).parts[:-1]} & skip_dirs))
     ev = Evaluation([], [])
+    try:
+        manifest = _read_manifest(root)
+    except (OSError, UnicodeError, csv.Error, ValueError) as e:
+        ev.errors.append(f"manifest.csv: {safe_text(e, 200)}")
+        return ev
+    available = {p.relative_to(root).as_posix() for p in files}
+    missing = [path for path in manifest if path not in available
+               and not ({part.lower() for part in PurePosixPath(path).parts[:-1]} & skip_dirs)]
+    if missing:
+        sample = ", ".join(missing[:5])
+        extra = f" (and {len(missing) - 5} more)" if len(missing) > 5 else ""
+        ev.errors.append(f"manifest.csv: paths not found among evaluation samples: {safe_text(sample, 160)}{extra}")
+        return ev
+    overrides = _read_overrides(root, files, ev.warnings)
     seen: set[str] = set()
     for p in files:
         label = _label_of(p, root, overrides)
@@ -127,7 +240,16 @@ def evaluate(root: Path, cfg: Config, only: str = "all", skip: set[str] | None =
             ev.duplicates += 1
             continue
         seen.add(verdict.sha256)
-        r = Result(p, label, verdict, source="/".join(p.relative_to(root).parts[:-1]) or "(root)")
+        entry = manifest.get(p.relative_to(root).as_posix(), ManifestEntry())
+        r = Result(
+            p, label, verdict,
+            source="/".join(p.relative_to(root).parts[:-1]) or "(root)",
+            group_id=entry.group_id or None,
+            dataset=entry.dataset,
+            license=entry.license,
+            reference=entry.reference,
+            collection_date=entry.collection_date,
+        )
         if only == "all" or r.split == only:
             ev.results.append(r)
     return ev
@@ -174,6 +296,24 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
     if ev.stale:
         L.append(f"NOTE: {ev.stale} saved scans were made by older analyzer logic or word lists. Their stored findings are re-scored "
                  "with today's weights, but new rules did not run on them. Re-scan the original e-mails (arer history import) for exact results.")
+    for warning in ev.warnings:
+        L.append(f"WARNING: {safe_text(warning, 220)}")
+    grouped = [r for r in R if r.group_id]
+    if grouped:
+        group_count = len({r.group_id for r in grouped})
+        ungrouped = len(R) - len(grouped)
+        L.append(f"Campaign split: {len(grouped)} samples in {group_count} group(s); "
+                 f"{ungrouped} ungrouped sample(s) use the individual file-hash split.")
+    provenance = sorted({(r.dataset, r.license, r.reference, r.collection_date) for r in R
+                         if r.dataset or r.license or r.reference or r.collection_date})
+    if provenance:
+        L.append("Dataset metadata (from manifest.csv):")
+        for dataset, license_name, reference, collection_date in provenance:
+            details = [f"dataset={dataset}" if dataset else "",
+                       f"license={license_name}" if license_name else "",
+                       f"reference={reference}" if reference else "",
+                       f"collected={collection_date}" if collection_date else ""]
+            L.append(f"  {safe_text('; '.join(x for x in details if x), 220)}")
     if min(len(phish), len(legit)) < SMALL_SAMPLE:
         L.append(f"WARNING: fewer than {SMALL_SAMPLE} samples in a class. Treat these numbers as a rough guide, not proof.")
     if not phish or not legit:

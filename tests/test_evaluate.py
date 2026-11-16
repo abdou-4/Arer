@@ -96,3 +96,100 @@ def test_cli_skip_dir(tmp_path):
     write(tmp_path / "legit" / "archive" / "old1.eml", "Sam <sam@example.org>", "old one", "hello old")
     r = CliRunner().invoke(main, ["eval", str(tmp_path), "--skip-dir", "archive"])
     assert r.exit_code == 0 and "2 phishing, 2 legitimate" in r.output
+
+
+# ---------------------- Phase 1: manifest, groups, path overrides ---------------------- #
+
+def test_manifest_keeps_campaign_group_together_and_records_provenance(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text(
+        "path,group_id,dataset,license,reference,collection_date\n"
+        "phish/p1.eml,phishing-pot:campaign-1,Phishing Pot,CC-BY-SA-4.0,https://example.org/source,2026-01-01\n"
+        "phish/p2.eml,phishing-pot:campaign-1,Phishing Pot,CC-BY-SA-4.0,https://example.org/source,2026-01-01\n"
+        "legit/l1.eml,legit-set:group-1,Modern mail,private,local,2026-01-01\n",
+        encoding="utf-8",
+    )
+    all_results = evaluate(tmp_path, cfg).results
+    by_group = {}
+    for result in all_results:
+        if result.group_id:
+            by_group.setdefault(result.group_id, set()).add(result.split)
+    assert by_group and all(len(splits) == 1 for splits in by_group.values())
+
+    dev = {r.path.relative_to(tmp_path).as_posix() for r in evaluate(tmp_path, cfg, only="dev").results}
+    test = {r.path.relative_to(tmp_path).as_posix() for r in evaluate(tmp_path, cfg, only="test").results}
+    assert dev.isdisjoint(test)
+    assert dev | test == {"phish/p1.eml", "phish/p2.eml", "legit/l1.eml", "legit/l2.eml"}
+    assert all(len({r.split for r in all_results if r.group_id == group}) == 1 for group in by_group)
+    p1 = next(r for r in all_results if r.path.name == "p1.eml")
+    assert p1.dataset == "Phishing Pot" and p1.license == "CC-BY-SA-4.0"
+    report = render(evaluate(tmp_path, cfg), cfg)
+    assert "Campaign split:" in report and "Dataset metadata" in report
+
+
+def test_manifest_invalid_path_fails_closed(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text("path,group_id\n../outside.eml,campaign-1\n", encoding="utf-8")
+    ev = evaluate(tmp_path, cfg)
+    assert ev.results == []
+    assert ev.errors and "manifest.csv" in ev.errors[0]
+
+
+def test_manifest_duplicate_path_fails_closed(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text(
+        "path,group_id\nphish/p1.eml,campaign-1\nphish/p1.eml,campaign-2\n",
+        encoding="utf-8",
+    )
+    ev = evaluate(tmp_path, cfg)
+    assert ev.results == [] and "duplicate path" in ev.errors[0]
+
+
+def test_manifest_unknown_path_fails_closed(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text(
+        "path,group_id\nphish/not-present.eml,campaign-1\n", encoding="utf-8"
+    )
+    ev = evaluate(tmp_path, cfg)
+    assert ev.results == [] and "not found" in ev.errors[0]
+
+
+def test_manifest_entries_in_skipped_directory_are_allowed(tmp_path):
+    build(tmp_path)
+    write(tmp_path / "legit" / "archive" / "old.eml", "A <a@example.org>", "old", "old message")
+    (tmp_path / "manifest.csv").write_text(
+        "path,group_id\nlegit/archive/old.eml,archive-batch-1\n", encoding="utf-8"
+    )
+    ev = evaluate(tmp_path, cfg, skip_dirs={"archive"})
+    assert len(ev.results) == 4 and not ev.errors
+
+
+def test_labels_csv_relative_path_targets_only_one_file(tmp_path):
+    build(tmp_path)
+    write(tmp_path / "legit" / "p1.eml", "A <a@example.org>", "other", "ordinary message")
+    (tmp_path / "labels.csv").write_text("path,label\nphish/p1.eml,legit\n", encoding="utf-8")
+    ev = evaluate(tmp_path, cfg)
+    labels = {r.path.relative_to(tmp_path).as_posix(): r.label for r in ev.results}
+    assert labels["phish/p1.eml"] == "legit"
+    assert labels["legit/p1.eml"] == "legit"
+
+
+def test_labels_csv_unknown_path_is_ignored_with_warning(tmp_path):
+    build(tmp_path)
+    (tmp_path / "labels.csv").write_text(
+        "path,label\nphish/missing.eml,legit\n", encoding="utf-8"
+    )
+    ev = evaluate(tmp_path, cfg)
+    assert next(r for r in ev.results if r.path.name == "p1.eml").label == "phish"
+    assert any("not found" in warning for warning in ev.warnings)
+
+
+def test_ambiguous_filename_override_is_ignored_with_warning(tmp_path):
+    write(tmp_path / "phish" / "same.eml", '"PayPal" <x@paypa1.example>', "verify", "http://1.2.3.4/login")
+    write(tmp_path / "legit" / "same.eml", "Sam <sam@example.org>", "hello", "ordinary message")
+    (tmp_path / "labels.csv").write_text("filename,label\nsame.eml,phish\n", encoding="utf-8")
+    ev = evaluate(tmp_path, cfg)
+    labels = {r.source: r.label for r in ev.results}
+    assert labels["phish"] == "phish" and labels["legit"] == "legit"
+    assert any("ambiguous" in warning for warning in ev.warnings)
+    assert "ambiguous" in render(ev, cfg)

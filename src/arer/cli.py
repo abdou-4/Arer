@@ -194,7 +194,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, raw, skip, save, co
 @click.option("--with-history-signals", is_flag=True,
               help="Include history.* findings (off by default: they leak campaign siblings into a test).")
 @click.option("--only", type=click.Choice(["all", "dev", "test"]), default="all", show_default=True,
-              help="Use a stable 80/20 split: tune on dev, check on test.")
+              help="Use a stable 80/20 split; manifest.csv keeps each group_id together.")
 @click.option("--skip-dir", "skip_dirs", multiple=True, help="Ignore any folder with this name (e.g. archive).")
 @click.option("--details", is_flag=True, help="List every sample with its score.")
 @click.option("--skip", multiple=True, help="Analyzer name to turn off, to see what it contributes.")
