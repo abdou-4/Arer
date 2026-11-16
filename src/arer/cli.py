@@ -22,6 +22,7 @@ from .config import ConfigError, load_config
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
 from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
+from .export import export_row, render as render_export
 from .history.indicators import extract_indicators
 from .history.store import HistoryStore, logic_hash
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
@@ -294,6 +295,53 @@ def alerts_set(directory, alert_id, status, note):
     out = write_disposition(d, m.path)
     click.echo(f"{m.alert.alert_id[:12]}  {safe_text(m.alert.source_file, 50)}  disposition: {status}"
                + (f"  ({safe_text(note, 120)})" if note else "") + f"\n  -> {safe_text(out.name, 80)}")
+
+
+@alerts.command("export")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--format", "fmt", type=click.Choice(["jsonl", "csv"]), default="jsonl", show_default=True,
+              help="jsonl = one flat JSON object per alert (SIEM-friendly); csv = one row per alert.")
+@click.option("-o", "--out", "out_file", type=click.Path(dir_okay=False, path_type=Path),
+              help="Write to this file instead of stdout.")
+@click.option("--raw", is_flag=True, help="Do not defang the exported IOCs (export is safe-by-default).")
+@click.option("--level", type=click.Choice([lv.value for lv in Level]), help="Only export this verdict level.")
+@click.option("--status", type=click.Choice([*STATUSES, "new"]),
+              help="Only export alerts with this disposition ('new' = not handled yet).")
+def alerts_export(directory, fmt, out_file, raw, level, status):
+    """Flatten alert records (+ their dispositions) for SIEM/SOAR/spreadsheets,
+    one line (jsonl) or row (csv) per alert."""
+    reads = read_alerts(directory)
+    bad = 0
+    rows = []
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+            continue
+        try:
+            d = read_disposition(r.path)
+        except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+            bad += 1
+            click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+            continue
+        if level and r.alert.verdict.level.value != level:
+            continue
+        st = d.status if d else "new"
+        if status and st != status:
+            continue
+        rows.append(export_row(r.alert, d, r.path.name))
+    if not rows and not bad:
+        click.echo(f"no alert records in {directory}")
+    text = render_export(rows, fmt, defang=not raw)
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(text, encoding="utf-8")
+        click.echo(f"exported {len(rows)} alert(s) -> {out_file}")
+    elif text:
+        click.echo(text, nl=False)
+    if bad:
+        click.echo(f"{len(rows)} exported, {bad} unreadable", err=True)
+    sys.exit(1 if bad else 0)
 
 
 # --------------------------------------------------------------------------- #

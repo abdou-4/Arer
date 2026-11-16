@@ -80,20 +80,20 @@ def test_bare_arer_without_a_terminal_still_shows_help():
 
 def test_every_typed_command_is_still_there():
     r = CliRunner().invoke(main, ["--help"])
-    for c in ("scan", "eval", "label", "history", "feeds", "parse", "menu"):
+    for c in ("scan", "eval", "label", "history", "alerts", "feeds", "parse", "menu"):
         assert c in r.output
 
 
 # ----------------------------------- scan flow ------------------------------------ #
 def test_scan_one_file_shows_the_equivalent_command_and_the_report(tmp_path, env):
     f = mail(tmp_path / "m.eml")
-    r = run(env, f"{item('Scan emails')}\n{f}\nn\nn\n0\n")
+    r = run(env, f"{item('Scan emails')}\n{f}\nn\nn\nn\n0\n")
     assert r.exit_code == 0 and f"arer scan {f}" in r.output and "Verdict" in r.output
 
 def test_scan_folder_offers_subfolders_and_one_line_output(tmp_path, env):
     (tmp_path / "box" / "inner").mkdir(parents=True)
     mail(tmp_path / "box" / "inner" / "a.eml"); mail(tmp_path / "box" / "inner" / "b.eml", subject="Notes")
-    r = run(env, f"{item('Scan emails')}\n{tmp_path / 'box'}\ny\ny\nn\nn\n0\n")
+    r = run(env, f"{item('Scan emails')}\n{tmp_path / 'box'}\ny\ny\nn\nn\nn\n0\n")
     running = next(l for l in r.output.splitlines() if "Running:" in l)
     assert "Found 2 email(s)" in r.output and " -r" in running and " -q" in running
     assert "a.eml" in r.output and "b.eml" in r.output
@@ -109,13 +109,19 @@ def test_missing_path_is_explained_and_q_goes_back(env):
 
 def test_a_phishing_result_does_not_crash_the_menu(tmp_path, env):
     f = mail(tmp_path / "p.eml", frm="PayPal Support <x@paypa1-secure.com>", subject="Verify now", body="Go to http://1.2.3.4/login", bad=True)
-    r = run(env, f"{item('Scan emails')}\n{f}\nn\nn\n0\n")           # scan exits with code 2 internally
+    r = run(env, f"{item('Scan emails')}\n{f}\nn\nn\nn\n0\n")           # scan exits with code 2 internally
     assert r.exit_code == 0 and r.output.count("What would you like") == 2 and "Goodbye" in r.output
 
 def test_scan_can_save_to_history(tmp_path, env):
     f = mail(tmp_path / "m.eml")
-    r = run(env, f"{item('Scan emails')}\n{f}\ny\nn\n0\n")
+    r = run(env, f"{item('Scan emails')}\n{f}\ny\nn\nn\n0\n")
     assert "--save" in r.output and "history: saved" in r.output
+
+def test_scan_can_save_alert_records(tmp_path, env):
+    f = mail(tmp_path / "m.eml")
+    r = run(env, f"{item('Scan emails')}\n{f}\nn\nn\ny\n{tmp_path / 'queue'}\n0\n")
+    assert "--alerts" in r.output
+    assert (tmp_path / "queue").is_dir()
 
 
 # ---------------------------------- other flows ----------------------------------- #
@@ -150,7 +156,47 @@ def test_internet_step_needs_confirmation(env):
 
 def test_help_lists_the_matching_commands(env):
     r = run(env, f"{item('Help')}\n0\n")
-    assert "arer scan PATH" in r.output and "arer label FILE" in r.output
+    assert "arer scan PATH" in r.output and "arer label FILE" in r.output and "arer alerts" in r.output
+
+
+# -------------------------------- alert queue flow -------------------------------- #
+def _alert_queue(tmp_path):
+    """A real alert record, produced the production way."""
+    from email.message import EmailMessage
+    src = tmp_path / "mail"
+    src.mkdir()
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "PayPal <x@paypa1-secure.com>", "me@example.org", "Verify now"
+    m.set_content("Verify http://1.2.3.4/login " + "filler text " * 60)
+    m.add_attachment(b"MZ\x90\x00" + b"0" * 40, maintype="application", subtype="octet-stream", filename="inv.pdf.exe")
+    (src / "p.eml").write_bytes(m.as_bytes())
+    r = CliRunner().invoke(main, ["scan", str(src), "--alerts", str(tmp_path / "queue"), "-q",
+                                  "--skip", "intel", "--skip", "history"])
+    assert r.exit_code >= 3, r.output
+    return tmp_path / "queue"
+
+
+def test_alert_queue_lists_and_decides(tmp_path, env):
+    from arer.alert import read_alerts
+    queue = _alert_queue(tmp_path)
+    r = run(env, f"{item('Alert queue')}\n1\n{queue}\n1\n0\n")     # list, all
+    assert "arer alerts list" in r.output and " new  " in r.output
+    aid = read_alerts(queue)[0].alert.alert_id[:8]
+    d = run(env, f"{item('Alert queue')}\n2\n{queue}\n{aid}\n3\nreal phish\n0\n")   # set -> phishing
+    assert "disposition: phishing" in d.output
+    after = CliRunner().invoke(main, ["alerts", "list", str(queue)])
+    assert " phishing  " in after.output
+
+
+def test_alert_queue_show_and_export(tmp_path, env):
+    from arer.alert import read_alerts
+    queue = _alert_queue(tmp_path)
+    aid = read_alerts(queue)[0].alert.alert_id[:8]
+    r = run(env, f"{item('Alert queue')}\n3\n{queue}\n{aid}\n0\n")     # show
+    assert '"schema": "arer.alert.v1"' in r.output
+    out = tmp_path / "siem.jsonl"
+    e = run(env, f"{item('Alert queue')}\n4\n{queue}\n1\n{out}\n0\n")   # export jsonl to file
+    assert "exported 1 alert" in e.output and out.is_file()
 
 
 # -------------------------------- expandability (AI) ------------------------------ #

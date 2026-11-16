@@ -48,6 +48,33 @@ mangled.
 | `note` | why. Verbatim, may be empty. |
 | `set_utc` | when this disposition was set, ISO-8601 UTC with `Z` suffix. |
 
+## Exporting the queue (Phase 6.3)
+
+```bash
+arer alerts export /alerts                          # JSONL to the screen
+arer alerts export /alerts --format csv -o q.csv    # one row per alert
+arer alerts export /alerts --status new             # only the unhandled
+arer alerts export /alerts --raw                    # keep real IOCs (default is defanged)
+```
+
+One flat line (JSONL) or row (CSV) per alert, dispositions merged in
+(`disposition_status` / `disposition_note` / `disposition_set_utc`, empty when
+`new`). The flat schema is frozen by `tests/test_export.py`
+(`EXPORT_KEYS` == `COLUMNS`); each line carries `record_file`, the queue file
+it came from, so an aggregate view can always be traced back to the record.
+
+Export is safe by default: every string is defanged on the way out
+(idempotent on records that were already defanged at scan time; the
+`schema` marker is never defanged), so an export can be pasted into a ticket
+or shipped to a SIEM without leaking live IOCs. The queue folder stays the
+source of truth — the export is derived and never written back.
+
+Batch rules are the same as everywhere in the queue: corrupt alert or
+disposition files are named on stderr and the command exits 1, while every
+healthy record still exports. Library use: `export_row(alert, disposition,
+record_file)` + `render(rows, "jsonl" | "csv", defang=True)` in
+`src/arer/export.py`.
+
 ## Reading rules
 
 Same discipline as the alert reader (6.1b), frozen by
