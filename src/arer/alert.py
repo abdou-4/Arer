@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import NamedTuple
 
 import pydantic
 from pydantic import BaseModel, Field
@@ -32,6 +34,7 @@ from .models import Email, Level, Verdict
 from .util.defang import clean_deep
 
 SCHEMA_VERSION = "arer.alert.v1"
+KNOWN_SCHEMAS = (SCHEMA_VERSION,)      # readers dispatch on this tuple; v2 appends, never replaces
 
 _ALERT_LEVELS = {Level.SUSPICIOUS, Level.LIKELY_PHISHING, Level.MALICIOUS}
 
@@ -84,3 +87,65 @@ def to_json(a: Alert, defang: bool = True, indent: int = 2) -> str:
         data = clean_deep(data)
         data["schema"] = SCHEMA_VERSION      # machine-readable marker: never defanged
     return json.dumps(data, indent=indent, ensure_ascii=False)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6.1b: reading records back. The producer side above freezes the shape;
+# this side freezes how a reader treats the folder of records - the queue
+# Phase 6.2 dispositions walks. Rules (docs/alert-record.md):
+#   - dispatch on the top-level "schema" marker, never trust the file name;
+#   - unknown schema -> explicit error, not a silent mis-read;
+#   - unknown extra keys are ignored (additions must be optional for readers);
+#   - one bad file never stops a directory scan.
+# --------------------------------------------------------------------------- #
+
+class AlertError(ValueError):
+    """A record could not be read. Message always names the file."""
+
+
+class AlertRead(NamedTuple):
+    """One *.alert.json file, parsed or not. Exactly one of alert/error is set."""
+    path: Path
+    alert: Alert | None
+    error: str | None
+
+
+def read_alert(path: Path) -> Alert:
+    """Parse and validate one record file, or raise AlertError naming it."""
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as e:
+        raise AlertError(f"{path.name}: cannot read file ({e})") from None
+    except json.JSONDecodeError as e:
+        raise AlertError(f"{path.name}: not valid JSON ({e.msg} at line {e.lineno})") from None
+    if not isinstance(data, dict):
+        raise AlertError(f"{path.name}: not a JSON object")
+    schema = data.get("schema")
+    if not schema:
+        raise AlertError(f"{path.name}: missing the 'schema' marker")
+    if schema not in KNOWN_SCHEMAS:
+        raise AlertError(f"{path.name}: unsupported schema '{schema}' "
+                         f"(this arer reads: {', '.join(KNOWN_SCHEMAS)})")
+    try:
+        return Alert.model_validate(data)
+    except pydantic.ValidationError as e:
+        fields = ", ".join(sorted({".".join(str(x) for x in err["loc"]) or "(root)" for err in e.errors()}))
+        raise AlertError(f"{path.name}: invalid {schema} record (bad field(s): {fields})") from None
+
+
+def read_alerts(directory: Path) -> list[AlertRead]:
+    """Every *.alert.json in the folder, sorted by name. Missing/empty folder -> [].
+    Broken records come back with alert=None and error set; they never stop the scan."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    reads = []
+    for p in sorted(directory.glob("*.alert.json")):
+        if not p.is_file() or p.is_symlink():
+            continue
+        try:
+            reads.append(AlertRead(p, read_alert(p), None))
+        except AlertError as e:
+            reads.append(AlertRead(p, None, str(e)))
+    return reads

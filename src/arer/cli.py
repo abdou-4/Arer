@@ -20,7 +20,7 @@ import click
 
 from .config import ConfigError, load_config
 from .evaluate import _label_of, evaluate, evaluate_history, render
-from .alert import build_alert, is_alert_level, to_json as alert_to_json
+from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
 from .history.indicators import extract_indicators
 from .history.store import HistoryStore, logic_hash
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
@@ -208,6 +208,57 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
     if failed:
         codes.append(1)
     sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)
+
+
+# --------------------------------------------------------------------------- #
+# arer alerts   (read back the records that `arer scan --alerts` wrote)
+# --------------------------------------------------------------------------- #
+@main.group()
+def alerts():
+    """Read alert records written by `arer scan --alerts DIR` (arer.alert.v1)."""
+
+
+@alerts.command("list")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--level", type=click.Choice([lv.value for lv in Level]), help="Only show this verdict level.")
+def alerts_list(directory, level):
+    """Every alert record in DIRECTORY, newest first. Broken files are listed too (exit 1)."""
+    reads = read_alerts(directory)
+    bad = 0
+    rows = []
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+            continue
+        if level and r.alert.verdict.level.value != level:
+            continue
+        rows.append(r.alert)
+    rows.sort(key=lambda a: (a.generated_utc, a.alert_id), reverse=True)
+    if rows:
+        click.echo(f"{'alert_id':<14}{'generated':<21}{'level':<18}{'score':>5}  {'sha256':<14}{'from':<26}file")
+        for a in rows:
+            sender = safe_text(a.scan.from_, 60)
+            click.echo(f"{a.alert_id[:12]:<14}{a.generated_utc:<21}{a.verdict.level.value:<18}{a.verdict.score:>5}  "
+                       f"{a.verdict.sha256[:12]:<14}{sender:<26}{safe_text(a.source_file, 40)}")
+    elif not bad:
+        click.echo(f"no alert records in {directory}")
+    if bad:
+        click.echo(f"{len(rows)} valid, {bad} unreadable")
+    sys.exit(1 if bad else 0)
+
+
+@alerts.command("show")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("alert_id")
+def alerts_show(directory, alert_id):
+    """Print the full record with id matching ALERT_ID (6+ characters is enough)."""
+    matches = {r.alert.alert_id: r.path for r in read_alerts(directory)
+               if r.alert and r.alert.alert_id.startswith(alert_id)}
+    if len(matches) != 1:
+        hint = "several match, give more characters" if len(matches) > 1 else "no alert record matches that"
+        raise click.ClickException(hint + " (copy the alert_id from: arer alerts list DIRECTORY)")
+    click.echo(matches.popitem()[1].read_text(encoding="utf-8"), nl=False)
 
 
 # --------------------------------------------------------------------------- #

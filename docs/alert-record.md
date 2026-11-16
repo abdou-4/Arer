@@ -36,6 +36,31 @@ paste into tickets and logs. Hex/ISO fields (`sha256`, `alert_id`,
 `logic_hash`, `generated_utc`) contain no IOC patterns and pass through
 unchanged.
 
+## Reading records (Phase 6.1b)
+
+```bash
+arer alerts list /alerts            # newest first; --level MALICIOUS filters
+arer alerts show /alerts <alert_id> # 6+ characters of the id; prints the record
+```
+
+Reading rules, frozen by `tests/test_alert_store.py`:
+
+- Dispatch on the top-level `schema` marker, never on the file name. An
+  unknown schema is an explicit error ("unsupported schema 'arer.alert.v99'"),
+  never a silent mis-read.
+- Unknown extra keys are ignored, so a record written by a newer arer still
+  reads (the forward-compatibility rule above).
+- Validation errors always name the file and the bad field(s)
+  (`x.alert.json: invalid arer.alert.v1 record (bad field(s): verdict.score)`),
+  so one corrupt record in a folder of thousands is one line on stderr.
+- One bad file never stops a batch: `arer alerts list` lists the good records
+  and exits 1, exactly like `arer parse` handles unreadable mail. Empty or
+  missing folder: no records, no crash.
+- Library use: `read_alert(path)` (raises `AlertError`) and
+  `read_alerts(dir)` -> `list[AlertRead]` where `AlertRead` is
+  `(path, alert | None, error | None)`, sorted by file name,
+  `*.alert.json` only, symlinks skipped.
+
 ## Versioning rules
 
 - Within a schema version, keys never move, shrink, or change type. Consumers
