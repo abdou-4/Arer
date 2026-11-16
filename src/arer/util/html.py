@@ -54,6 +54,19 @@ class HtmlInfo:
 
 
 class _Reader(HTMLParser):
+    # CPython's June 2025 hardening for CVE-2025-6069 made html.parser treat
+    # xmp/iframe/noembed/noframes as raw text (CDATA), textarea/title as RCDATA
+    # and plaintext/scripting-<noscript> as raw text too. Phishing HTML hides
+    # junk inside exactly those elements (tag salad under <noframes>, padding
+    # under <xmp>, ...), and seeing into them is deliberate detection behavior.
+    # Restore the pre-hardening semantics on every interpreter generation by
+    # entering raw-text mode only for script/style, whose content Arer skips
+    # anyway. The hardening's complexity fixes (bounded regexes, DoS guards)
+    # remain in effect for those and for the overall feed loop.
+    def set_cdata_mode(self, elem, *args, **kwargs):
+        if elem in ("script", "style"):
+            super().set_cdata_mode(elem, *args, **kwargs)
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.info = HtmlInfo()

@@ -99,6 +99,22 @@ def test_counters():
     i = parse_html(SALAD)
     assert i.unknown_tags == 3 and i.doctypes == 4 and i.filler_tags >= 35 and i.hidden_elements >= 22 and i.bg_images == 1
 
+def test_content_inside_raw_text_elements_is_still_seen():
+    # CPython's June 2025 CVE-2025-6069 hardening made xmp/iframe/noembed/
+    # noframes raw text (CDATA) and textarea/title RCDATA. Detection must be
+    # identical on pre- and post-hardening interpreters: junk hidden inside
+    # exactly those elements is what body.html_obfuscation looks for.
+    html = ('<html><head><title><EEE></title></head>'
+            '<iframe><AAA><!DOCTYPE><option></option>'
+            '<div style="display:none">x</div></iframe>'
+            '<xmp><BBB><textarea>t</textarea></xmp>'
+            '<noembed><CCC></noembed><noframes><DDD></noframes></html>')
+    i = parse_html(html)
+    assert i.unknown_tags == 6          # AAA BBB CCC DDD EEE + noembed (not in the known-tag list)
+    assert i.doctypes == 1              # the one inside <iframe> is seen
+    assert i.filler_tags == 4           # option + textarea + xmp + noframes
+    assert i.hidden_elements == 1       # display:none div inside <iframe>
+
 def test_outlook_generated_html_is_not_junk():
     outlook = ('<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><xml><o:OfficeDocumentSettings>'
                '</o:OfficeDocumentSettings></xml></head><body><v:roundrect><v:textbox></v:textbox></v:roundrect><p><o:p>Hello</o:p></p>'
