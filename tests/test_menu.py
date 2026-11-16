@@ -220,6 +220,12 @@ def test_watch_flow_runs_one_pass_and_archives(tmp_path, env):
     assert (drop / "handled" / "m.eml").is_file()
 
 
+def test_alert_queue_stats_flow(tmp_path, env):
+    queue = _alert_queue(tmp_path)
+    r = run(env, f"{item('Alert queue')}\n7\n{queue}\n0\n")             # stats
+    assert "arer alerts stats" in r.output and "records" in r.output
+
+
 # -------------------------------- expandability (AI) ------------------------------ #
 def test_a_new_action_appears_with_the_next_number(monkeypatch, env):
     seen = []

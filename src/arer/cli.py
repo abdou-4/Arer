@@ -25,6 +25,7 @@ from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to
 from .campaign import build_campaigns, campaign_level, campaign_status
 from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
 from .export import export_row, render as render_export
+from .metrics import queue_stats, render_queue_stats
 from .history.indicators import extract_indicators
 from .history.store import HistoryStore, logic_hash
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
@@ -423,6 +424,35 @@ def alerts_set_group(directory, sha256, status, note):
         write_disposition(build_disposition(a.alert_id, status, mail_sha256=c.mail_sha256, note=note or ""), p)
     click.echo(f"{c.mail_sha256[:12]}  {len(c.alerts)} alert(s) marked {status}"
                + (f"  ({safe_text(note, 120)})" if note else ""))
+
+
+@alerts.command("stats")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def alerts_stats(directory):
+    """Metrics over the alert queue: backlog, false-alarm share, response
+    time, top senders. Read-only; a broken record or corrupt sidecar is
+    excluded from every number, named, and makes the command exit 1."""
+    reads = read_alerts(directory)
+    bad = 0
+    pairs = []
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+            continue
+        try:
+            d = read_disposition(r.path)
+        except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+            bad += 1
+            click.echo(click.style(f"✗ {safe_text(e, 200)} (excluded from the metrics)", fg="red"), err=True)
+            continue
+        pairs.append((r.alert, d))
+    if not pairs and not bad:
+        click.echo(f"no alert records in {directory}")
+        return
+    click.echo(render_queue_stats(queue_stats(pairs)))
+    if bad:
+        sys.exit(1)
 
 
 # --------------------------------------------------------------------------- #

@@ -279,7 +279,8 @@ def alerts_flow() -> None:
         ("show", "Show one full alert record"),
         ("export", "Export for a SIEM / SOAR or spreadsheet"),
         ("campaigns", "Show campaigns - one row per distinct mail  (exact sha256)"),
-        ("set-group", "Record one decision for every alert of the same mail")])
+        ("set-group", "Record one decision for every alert of the same mail"),
+        ("stats", "Queue metrics - backlog, false alarms, response time")])
     if what is None:
         return
     folder = ask_path("Folder with the alert records  (the folder you gave scan --alerts)", want="folder")
@@ -329,6 +330,8 @@ def alerts_flow() -> None:
         if status is None:
             return
         run_cli(["alerts", "campaigns", str(folder)] + (["--status", status] if status != "all" else []))
+    elif what == "stats":
+        run_cli(["alerts", "stats", str(folder)])
     else:
         sha = click.prompt(f"  sha256 of the mail, from the campaigns list (6 or more characters) {dim('(q = back)')}",
                            default="", show_default=False).strip()
@@ -388,6 +391,7 @@ def help_flow() -> None:
     arer history list|stats|import|forget
     arer alerts list|campaigns|show DIR    read the alert queue (records, campaigns)
     arer alerts set|set-group DIR ID STATUS        record decisions (one alert, or one whole mail)
+    arer alerts stats DIR                  queue metrics (backlog, false alarms, response time)
     arer alerts export DIR                 export the queue for a SIEM / SOAR
     arer watch DROPDIR [--once]            scan every mail that lands in a folder
     arer feeds status|update       local blocklists (update needs internet)
