@@ -1,5 +1,6 @@
 from email.message import EmailMessage
 
+import pytest
 from click.testing import CliRunner
 
 from arer.cli import main
@@ -124,34 +125,51 @@ def test_manifest_keeps_campaign_group_together_and_records_provenance(tmp_path)
     p1 = next(r for r in all_results if r.path.name == "p1.eml")
     assert p1.dataset == "Phishing Pot" and p1.license == "CC-BY-SA-4.0"
     report = render(evaluate(tmp_path, cfg), cfg)
-    assert "Campaign split:" in report and "Dataset metadata" in report
+    assert "Campaign grouping: 3/4" in report and "Dataset provenance" in report and "Phishing Pot" in report
 
 
-def test_manifest_invalid_path_fails_closed(tmp_path):
-    build(tmp_path)
-    (tmp_path / "manifest.csv").write_text("path,group_id\n../outside.eml,campaign-1\n", encoding="utf-8")
-    ev = evaluate(tmp_path, cfg)
-    assert ev.results == []
-    assert ev.errors and "manifest.csv" in ev.errors[0]
-
-
-def test_manifest_duplicate_path_fails_closed(tmp_path):
+def test_ungrouped_samples_keep_hash_split_and_report_warns(tmp_path):
     build(tmp_path)
     (tmp_path / "manifest.csv").write_text(
-        "path,group_id\nphish/p1.eml,campaign-1\nphish/p1.eml,campaign-2\n",
-        encoding="utf-8",
+        "path,group_id\nphish/p1.eml,campaign-1\nphish/p2.eml,campaign-1\n", encoding="utf-8"
     )
+    dev = {r.path.relative_to(tmp_path).as_posix() for r in evaluate(tmp_path, cfg, only="dev").results}
+    test = {r.path.relative_to(tmp_path).as_posix() for r in evaluate(tmp_path, cfg, only="test").results}
+    assert dev.isdisjoint(test) and {"phish/p1.eml", "phish/p2.eml"} <= (dev | test)
+    assert ("phish/p1.eml" in dev) == ("phish/p2.eml" in dev)          # group stays together
     ev = evaluate(tmp_path, cfg)
-    assert ev.results == [] and "duplicate path" in ev.errors[0]
+    assert any("have no group_id and use the individual content-hash split" in w for w in ev.warnings)
+    assert "content-hash split" in render(ev, cfg)
 
 
-def test_manifest_unknown_path_fails_closed(tmp_path):
+def test_manifest_rejects_unknown_sample_path(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text("path,group_id\nphish/missing.eml,campaign-1\n")
+    with pytest.raises(ValueError, match="does not match a mail sample"):
+        evaluate(tmp_path, cfg)
+
+
+def test_manifest_rejects_duplicate_paths(tmp_path):
     build(tmp_path)
     (tmp_path / "manifest.csv").write_text(
-        "path,group_id\nphish/not-present.eml,campaign-1\n", encoding="utf-8"
+        "path,group_id\nphish/p1.eml,campaign-1\nphish/p1.eml,campaign-2\n"
     )
-    ev = evaluate(tmp_path, cfg)
-    assert ev.results == [] and "not found" in ev.errors[0]
+    with pytest.raises(ValueError, match="duplicate path"):
+        evaluate(tmp_path, cfg)
+
+
+def test_manifest_rejects_path_traversal(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text("path,group_id\n../outside.eml,campaign-1\n")
+    with pytest.raises(ValueError, match="safe root-relative path"):
+        evaluate(tmp_path, cfg)
+
+
+def test_manifest_rejects_unreadable_encoding(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_bytes(b"path,group_id\n\xff,campaign-1\n")
+    with pytest.raises(ValueError, match="could not read dataset metadata"):
+        evaluate(tmp_path, cfg)
 
 
 def test_manifest_entries_in_skipped_directory_are_allowed(tmp_path):
@@ -174,6 +192,27 @@ def test_labels_csv_relative_path_targets_only_one_file(tmp_path):
     assert labels["legit/p1.eml"] == "legit"
 
 
+def test_relative_path_label_override_disambiguates_duplicate_names(tmp_path):
+    write(tmp_path / "phish" / "same.eml", "A <a@bad.example>", "phish sample", "bad")
+    write(tmp_path / "legit" / "same.eml", "B <b@good.example>", "legit sample", "good")
+    (tmp_path / "labels.csv").write_text("path,label\nlegit/same.eml,phish\n")
+    ev = evaluate(tmp_path, cfg)
+    labels = {r.path.relative_to(tmp_path).as_posix(): r.label for r in ev.results}
+    assert labels["phish/same.eml"] == "phish"
+    assert labels["legit/same.eml"] == "phish"
+
+
+def test_conflicting_duplicate_path_overrides_are_all_ignored(tmp_path):
+    build(tmp_path)
+    (tmp_path / "labels.csv").write_text(
+        "path,label\nphish/p2.eml,phish\nphish/p2.eml,legit\n"
+    )
+    ev = evaluate(tmp_path, cfg)
+    p2 = next(r for r in ev.results if r.path.name == "p2.eml")
+    assert p2.label == "phish"
+    assert any("duplicate target" in warning for warning in ev.warnings)
+
+
 def test_labels_csv_unknown_path_is_ignored_with_warning(tmp_path):
     build(tmp_path)
     (tmp_path / "labels.csv").write_text(
@@ -193,3 +232,11 @@ def test_ambiguous_filename_override_is_ignored_with_warning(tmp_path):
     assert labels["phish"] == "phish" and labels["legit"] == "legit"
     assert any("ambiguous" in warning for warning in ev.warnings)
     assert "ambiguous" in render(ev, cfg)
+
+
+def test_cli_reports_invalid_manifest_cleanly(tmp_path):
+    build(tmp_path)
+    (tmp_path / "manifest.csv").write_text("group_id\ncampaign-1\n")
+    result = CliRunner().invoke(main, ["eval", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "manifest.csv needs a 'path' column" in result.output
