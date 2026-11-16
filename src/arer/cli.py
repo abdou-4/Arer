@@ -21,6 +21,7 @@ import click
 from .config import ConfigError, load_config
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
+from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
 from .history.indicators import extract_indicators
 from .history.store import HistoryStore, logic_hash
 from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
@@ -221,8 +222,11 @@ def alerts():
 @alerts.command("list")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--level", type=click.Choice([lv.value for lv in Level]), help="Only show this verdict level.")
-def alerts_list(directory, level):
-    """Every alert record in DIRECTORY, newest first. Broken files are listed too (exit 1)."""
+@click.option("--status", type=click.Choice([*STATUSES, "new"]),
+              help="Only show alerts with this disposition ('new' = not handled yet).")
+def alerts_list(directory, level, status):
+    """Every alert record in DIRECTORY, newest first, with its disposition.
+    Broken alert or disposition files are named too (exit 1)."""
     reads = read_alerts(directory)
     bad = 0
     rows = []
@@ -233,14 +237,23 @@ def alerts_list(directory, level):
             continue
         if level and r.alert.verdict.level.value != level:
             continue
-        rows.append(r.alert)
-    rows.sort(key=lambda a: (a.generated_utc, a.alert_id), reverse=True)
+        try:
+            d = read_disposition(r.path)
+        except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+            bad += 1
+            click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+            continue
+        st = d.status if d else "new"
+        if status and st != status:
+            continue
+        rows.append((r.alert, st))
+    rows.sort(key=lambda row: (row[0].generated_utc, row[0].alert_id), reverse=True)
     if rows:
-        click.echo(f"{'alert_id':<14}{'generated':<21}{'level':<18}{'score':>5}  {'sha256':<14}{'from':<26}file")
-        for a in rows:
+        click.echo(f"{'alert_id':<14}{'generated':<21}{'level':<18}{'score':>5}  {'status':<14}{'sha256':<14}{'from':<26}file")
+        for a, st in rows:
             sender = safe_text(a.scan.from_, 60)
             click.echo(f"{a.alert_id[:12]:<14}{a.generated_utc:<21}{a.verdict.level.value:<18}{a.verdict.score:>5}  "
-                       f"{a.verdict.sha256[:12]:<14}{sender:<26}{safe_text(a.source_file, 40)}")
+                       f"{st:<14}{a.verdict.sha256[:12]:<14}{sender:<26}{safe_text(a.source_file, 40)}")
     elif not bad:
         click.echo(f"no alert records in {directory}")
     if bad:
@@ -259,6 +272,28 @@ def alerts_show(directory, alert_id):
         hint = "several match, give more characters" if len(matches) > 1 else "no alert record matches that"
         raise click.ClickException(hint + " (copy the alert_id from: arer alerts list DIRECTORY)")
     click.echo(matches.popitem()[1].read_text(encoding="utf-8"), nl=False)
+
+
+@alerts.command("set")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("alert_id")
+@click.argument("status", type=click.Choice(STATUSES))
+@click.option("--note", help="Why (the analyst's words, stored verbatim).")
+def alerts_set(directory, alert_id, status, note):
+    """Record the decision about one alert: acknowledged, benign or phishing.
+
+    Writes <name>.disposition.json next to the alert record; the record itself
+    is never modified. No disposition yet = `new` (see: arer alerts list --status new)."""
+    matches = [r for r in read_alerts(directory)
+               if r.alert and r.alert.alert_id.startswith(alert_id)]
+    if len(matches) != 1:
+        hint = "several match, give more characters" if len(matches) > 1 else "no alert record matches that"
+        raise click.ClickException(hint + " (copy the alert_id from: arer alerts list DIRECTORY)")
+    m = matches[0]
+    d = build_disposition(m.alert.alert_id, status, mail_sha256=m.alert.verdict.sha256, note=note or "")
+    out = write_disposition(d, m.path)
+    click.echo(f"{m.alert.alert_id[:12]}  {safe_text(m.alert.source_file, 50)}  disposition: {status}"
+               + (f"  ({safe_text(note, 120)})" if note else "") + f"\n  -> {safe_text(out.name, 80)}")
 
 
 # --------------------------------------------------------------------------- #
