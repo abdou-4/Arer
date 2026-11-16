@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Why the odd matrix:
+# CPython's June 2025 html.parser hardening (HTML5 CDATA conformance, following
+# CVE-2025-6069) makes HTMLParser treat the content of noframes/iframe/noembed/xmp
+# as raw text. Arer's tag-salad detection and two tests in tests/test_phase5c.py
+# rely on seeing inside those elements, so every official CPython from ~3.13.6 /
+# 3.12.11 onward fails exactly 2 tests (test_tag_salad_is_detected, test_counters).
+# Note: uv's standalone Python builds carry this backport even for old patch
+# releases, so the suite is pinned to official CPython builds via setup-python,
+# and uv only syncs dependencies against that exact interpreter.
+# - Job "3.13.5": pinned official build, the environment the suite is verified
+#   green on (291+ tests, 0 failures).
+# - Job "3.13 (latest)": continue-on-error, so the known breakage shows up as a
+#   visible expected-failure signal instead of a red pipeline.
+# TODO: make parse_html robust across both parser behaviors (detection-baseline
+# change -> needs its own measured commit), then drop the pin and this job.
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.13.5"
+            continue-on-error: false
+          - python-version: "3.13"
+            continue-on-error: true
+    continue-on-error: ${{ matrix.continue-on-error }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up official CPython ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+
+      - name: Sync dependencies against the selected interpreter
+        run: uv sync --frozen --python "$(command -v python3.13)"
+
+      - name: Run tests
+        run: uv run pytest -q
