@@ -6,6 +6,7 @@ from click.testing import CliRunner
 from arer.cli import main
 from arer.config import load_config
 from arer.evaluate import evaluate, render, wilson
+from arer.history.store import logic_hash
 
 cfg = load_config()
 
@@ -64,6 +65,12 @@ def test_cli_eval_runs(tmp_path):
     build(tmp_path)
     r = CliRunner().invoke(main, ["eval", str(tmp_path), "--details"])
     assert r.exit_code == 0 and "Detection by level" in r.output and "Every sample" in r.output
+
+def test_report_records_logic_hash(tmp_path):
+    build(tmp_path)
+    out = render(evaluate(tmp_path, cfg), cfg)
+    line = next(l for l in out.splitlines() if l.startswith("logic_hash:"))
+    assert logic_hash(cfg) in line
 
 def test_cli_eval_without_labels_fails_cleanly(tmp_path):
     write(tmp_path / "x" / "a.eml", "A <a@example.org>", "s", "b")

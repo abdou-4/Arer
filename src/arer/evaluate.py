@@ -300,6 +300,8 @@ def render(ev: Evaluation, cfg: Config, details: bool = False) -> str:
     L.append(f"Samples: {len(phish)} phishing, {len(legit)} legitimate"
              + (f"   ({ev.duplicates} duplicates skipped)" if ev.duplicates else "")
              + (f"   ({ev.unlabeled} files outside phish/ or legit/ ignored)" if ev.unlabeled else ""))
+    L.append(f"logic_hash: {logic_hash(cfg)}   (record this with every baseline run; "
+             "same fingerprint stored with each saved scan)")
     if ev.stale:
         L.append(f"NOTE: {ev.stale} saved scans were made by older analyzer logic or word lists. Their stored findings are re-scored "
                  "with today's weights, but new rules did not run on them. Re-scan the original e-mails (arer history import) for exact results.")
