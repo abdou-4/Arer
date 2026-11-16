@@ -277,7 +277,9 @@ def alerts_flow() -> None:
         ("list", "Show the queue  (new = needs a decision)"),
         ("set", "Record my decision about one alert"),
         ("show", "Show one full alert record"),
-        ("export", "Export for a SIEM / SOAR or spreadsheet")])
+        ("export", "Export for a SIEM / SOAR or spreadsheet"),
+        ("campaigns", "Show campaigns - one row per distinct mail  (exact sha256)"),
+        ("set-group", "Record one decision for every alert of the same mail")])
     if what is None:
         return
     folder = ask_path("Folder with the alert records  (the folder you gave scan --alerts)", want="folder")
@@ -308,7 +310,7 @@ def alerts_flow() -> None:
                            default="", show_default=False).strip()
         if aid and aid.lower() not in ("q", "back"):
             run_cli(["alerts", "show", str(folder), aid])
-    else:
+    elif what == "export":
         fmt = ask_choice("Format:", [("jsonl", "JSONL - one flat JSON object per alert  (SIEM-friendly)"),
                                      ("csv", "CSV - one row per alert  (spreadsheets)")])
         if fmt is None:
@@ -318,6 +320,27 @@ def alerts_flow() -> None:
         if out:
             args += ["-o", out]
         run_cli(args)
+    elif what == "campaigns":
+        status = ask_choice("Which groups?", [("all", "All"), ("new", "Nothing handled yet"),
+                                              ("acknowledged", "Acknowledged"),
+                                              ("benign", "Benign (false alarm)"),
+                                              ("phishing", "Phishing (true positive)"),
+                                              ("mixed", "Members disagree")])
+        if status is None:
+            return
+        run_cli(["alerts", "campaigns", str(folder)] + (["--status", status] if status != "all" else []))
+    else:
+        sha = click.prompt(f"  sha256 of the mail, from the campaigns list (6 or more characters) {dim('(q = back)')}",
+                           default="", show_default=False).strip()
+        decision = ask_choice("My decision:", [("acknowledged", "Acknowledged - seen, work queued"),
+                                               ("benign", "Benign - false alarm"),
+                                               ("phishing", "Phishing - true positive")])
+        if sha and sha.lower() not in ("q", "back") and decision:
+            note = click.prompt("  A short note (optional, press Enter to skip)", default="", show_default=False).strip()
+            args = ["alerts", "set-group", str(folder), sha, decision]
+            if note:
+                args += ["--note", note]
+            run_cli(args)
 
 
 @register_action("Blocklists", "Download or check phishing blocklists")
@@ -350,7 +373,8 @@ def help_flow() -> None:
     arer eval [FOLDER]             measure accuracy on labeled samples
     arer label FILE phish|legit    teach arer from your own decision
     arer history list|stats|import|forget
-    arer alerts list|show|set|export DIR   work the alert queue (records, dispositions, export)
+    arer alerts list|campaigns|show DIR    read the alert queue (records, campaigns)
+    arer alerts set|set-group DIR ID STATUS        record decisions (one alert, or one whole mail)
     arer feeds status|update       local blocklists (update needs internet)
     arer parse PATH                convert emails to JSON
     arer --help                    every option

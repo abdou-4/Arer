@@ -21,6 +21,7 @@ import click
 from .config import ConfigError, load_config
 from .evaluate import _label_of, evaluate, evaluate_history, render
 from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
+from .campaign import build_campaigns, campaign_level, campaign_status
 from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
 from .export import export_row, render as render_export
 from .history.indicators import extract_indicators
@@ -342,6 +343,84 @@ def alerts_export(directory, fmt, out_file, raw, level, status):
     if bad:
         click.echo(f"{len(rows)} exported, {bad} unreadable", err=True)
     sys.exit(1 if bad else 0)
+
+
+@alerts.command("campaigns")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--level", type=click.Choice([lv.value for lv in Level]),
+              help="Only show groups whose most severe record has this level.")
+@click.option("--status", type=click.Choice([*STATUSES, "new", "mixed"]),
+              help="Only show groups with this combined disposition ('new' = no record handled yet, "
+                   "'mixed' = members disagree).")
+def alerts_campaigns(directory, level, status):
+    """One row per distinct mail in DIRECTORY (records grouped by exact sha256):
+    how many times it alerted, when it was first/last seen, and the combined
+    disposition of its records.
+
+    v1 groups by exact hash only - mails that merely look similar stay
+    separate campaigns (no fuzzy clustering)."""
+    reads = read_alerts(directory)
+    bad = 0
+    for r in reads:
+        if r.alert is None:
+            bad += 1
+            click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
+    rows = []
+    for c in build_campaigns(reads):
+        members = []                                 # (alert, disposition|None), readable members only
+        for a, p in zip(c.alerts, c.paths):
+            try:
+                d = read_disposition(p)
+            except Exception as e:                       # noqa: BLE001 - DispositionError names the file
+                bad += 1
+                click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+                continue
+            members.append((a, d))
+        if not members:
+            continue                                     # every member unreadable: nothing honest to show
+        lvl = campaign_level([a for a, _ in members])
+        if level and lvl.value != level:
+            continue
+        st = campaign_status([d.status if d else "new" for _, d in members])
+        if status and st != status:
+            continue
+        rows.append((members, lvl, max(a.verdict.score for a, _ in members), st))
+    if rows:
+        click.echo(f"{'sha256':<14}{'seen':>5}  {'level':<18}{'score':>5}  "
+                   f"{'first':<21}{'last':<21}{'from':<26}status")
+        for members, lvl, score, st in rows:
+            sender = safe_text(members[-1][0].scan.from_, 60)
+            click.echo(f"{members[0][0].verdict.sha256[:12]:<14}{len(members):>5}  {lvl.value:<18}{score:>5}  "
+                       f"{members[0][0].generated_utc:<21}{members[-1][0].generated_utc:<21}{sender:<26}{st}")
+    elif not bad:
+        click.echo(f"no alert records in {directory}")
+    if bad:
+        click.echo(f"{len(rows)} campaign(s), {bad} unreadable")
+    sys.exit(1 if bad else 0)
+
+
+@alerts.command("set-group")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("sha256")
+@click.argument("status", type=click.Choice(STATUSES))
+@click.option("--note", help="Why (the analyst's words, stored verbatim).")
+def alerts_set_group(directory, sha256, status, note):
+    """Record one decision for every alert record of the same mail.
+
+    SHA256 is 6 or more hex characters of the mail's hash (copy it from
+    `alerts campaigns`). Writes/overwrites the per-alert disposition sidecars
+    of the whole group; the alert records themselves are never modified."""
+    sha256 = sha256.lower()
+    campaigns = build_campaigns(read_alerts(directory))
+    matches = [c for c in campaigns if c.mail_sha256.startswith(sha256)]
+    if len(matches) != 1:
+        hint = "several campaigns match, give more characters" if len(matches) > 1 else "no campaign matches that sha256"
+        raise click.ClickException(hint + " (copy the sha256 from: arer alerts campaigns DIRECTORY)")
+    c = matches[0]
+    for a, p in zip(c.alerts, c.paths):
+        write_disposition(build_disposition(a.alert_id, status, mail_sha256=c.mail_sha256, note=note or ""), p)
+    click.echo(f"{c.mail_sha256[:12]}  {len(c.alerts)} alert(s) marked {status}"
+               + (f"  ({safe_text(note, 120)})" if note else ""))
 
 
 # --------------------------------------------------------------------------- #
