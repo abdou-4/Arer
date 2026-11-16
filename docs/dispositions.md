@@ -11,9 +11,13 @@ codes in `docs/cli-contract.md`.
 
 ```
 alerts/
-  salad.eml.alert.json          <- the record, never modified (arer.alert.v1)
-  salad.eml.disposition.json    <- your decision (arer.disposition.v1)
+  3f9c...alert_id....alert.json          <- the record, never modified (arer.alert.v1)
+  3f9c...alert_id....disposition.json    <- your decision (arer.disposition.v1)
 ```
+
+Since R1.1 the record file is named by the alert's immutable `alert_id`, so a
+source filename collision can never overwrite a record or re-attach an old
+decision to a new mail.
 
 The alert record is the machine's statement about the mail and stays
 byte-for-byte frozen (its golden test keeps its meaning). The disposition is

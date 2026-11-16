@@ -190,10 +190,12 @@ def test_stats_reflect_dispositions(queue_dir):
 
 def test_stats_names_a_broken_record_and_exits_1(queue_dir):
     from arer.cli import main
+    # R1.1: a foreign file under a source-derived name can no longer overwrite
+    # the real record (its name is the alert_id now), so all 3 stay valid...
     (queue_dir / "c.eml.alert.json").write_text("{oops", encoding="utf-8")
     res = CliRunner().invoke(main, ["alerts", "stats", str(queue_dir)])
     assert res.exit_code == 1
-    assert "c.eml.alert.json" in res.output and "2 valid" in res.output
+    assert "c.eml.alert.json" in res.output and "3 valid" in res.output
 
 
 def test_stats_names_a_corrupt_sidecar_and_exits_1(queue_dir):

@@ -143,10 +143,14 @@ def test_scan_alerts_dir_writes_records_for_alert_level_emails_only(tmp_path):
                                     "--skip", "intel", "--skip", "history"])
     assert res.exit_code >= 3, res.output
     written = sorted(p.name for p in alerts.glob("*.alert.json"))
-    assert written == ["salad.eml.alert.json"], f"alert records written: {written}"
-    d = json.loads((alerts / "salad.eml.alert.json").read_text(encoding="utf-8"))
+    assert len(written) == 1, f"alert records written: {written}"
+    # R1.1: the record file name is the immutable alert_id, NOT the source name
+    assert written[0] != "salad.eml.alert.json" and written[0].endswith(".alert.json")
+    d = json.loads((alerts / written[0]).read_text(encoding="utf-8"))
     assert d["schema"] == "arer.alert.v1"
+    assert written[0] == f"{d['alert_id']}.alert.json"
     assert d["verdict"]["level"] in {"SUSPICIOUS", "LIKELY_PHISHING", "MALICIOUS"}
+    assert d["source_file"] == "salad[.]eml"        # stored defanged (v1 stores attacker strings defanged)
 
 
 def test_scan_alerts_dir_is_created_and_batch_safe(tmp_path):

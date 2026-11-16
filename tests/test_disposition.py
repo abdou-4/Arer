@@ -4,14 +4,20 @@ A disposition is the analyst's decision about one alert record: acknowledged
 (seen, work queued), benign (false alarm) or phishing (true positive). No
 sidecar file means the alert is `new`.
 
-The disposition is a SIDECAST file (`<name>.alert.json` ->
-`<name>.disposition.json`) keyed by alert_id: the alert record itself is never
-mutated, so 6.1a's byte-for-byte golden keeps its meaning and a disposition
-can be re-set, moved or deleted without touching attacker-derived content.
+The disposition is a SIDECAST file sitting beside the record:
+
+    <alert_id>.alert.json  ->  <alert_id>.disposition.json
+
+keyed by alert_id (R1.1: the RECORD file name is the alert_id too, so a
+source filename collision can never mix two mails). The alert record itself
+is never mutated, so 6.1a's byte-for-byte golden keeps its meaning and a
+disposition can be re-set, moved or deleted without touching
+attacker-derived content.
 
 Frozen here:
 - test_frozen_key_set / test_golden_disposition_record   the record shape
 - test_statuses_are_frozen                               the vocabulary
+- test_sidecar_mismatch_is_an_integrity_error ...        the R1.2 linkage rules
 
 Reading rules mirror the alert record (tests/test_alert_store.py): dispatch on
 the "schema" marker, unknown schema is an explicit error, unknown extra keys
@@ -165,14 +171,14 @@ def test_missing_sidecar_reads_as_none(alert_dir):
 
 def test_set_then_read_round_trip(alert_dir):
     from arer.cli import main
-    alert = read_alerts(alert_dir)[0].alert
-    res = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), alert.alert_id[:8],
+    rec = read_alerts(alert_dir)[0]
+    res = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), rec.alert.alert_id[:8],
                                     "acknowledged", "--note", "seen in triage"])
     assert res.exit_code == 0, res.output
-    d = read_disposition(alert_dir / "salad.eml.alert.json")
+    d = read_disposition(rec.path, rec.alert)
     assert d is not None
-    assert d.alert_id == alert.alert_id
-    assert d.mail_sha256 == alert.verdict.sha256
+    assert d.alert_id == rec.alert.alert_id
+    assert d.mail_sha256 == rec.alert.verdict.sha256
     assert d.status == "acknowledged" and d.note == "seen in triage"
     assert d.set_utc.endswith("Z")
 
@@ -203,14 +209,15 @@ def test_set_rejects_unknown_status(alert_dir):
 
 def test_set_updates_in_place(alert_dir):
     from arer.cli import main
-    alert = read_alerts(alert_dir)[0].alert
-    first = alert_dir / "salad.eml.disposition.json"
-    r1 = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), alert.alert_id[:8], "acknowledged"])
+    from arer.alert import read_alerts
+    rec = read_alerts(alert_dir)[0]
+    first = disposition_path(rec.path)
+    r1 = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), rec.alert.alert_id[:8], "acknowledged"])
     assert r1.exit_code == 0 and first.is_file()
-    r2 = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), alert.alert_id[:8], "phishing",
+    r2 = CliRunner().invoke(main, ["alerts", "set", str(alert_dir), rec.alert.alert_id[:8], "phishing",
                                    "--note", "real campaign"])
     assert r2.exit_code == 0
-    assert sorted(p.name for p in alert_dir.glob("*.disposition.json")) == ["salad.eml.disposition.json"]
+    assert sorted(p.name for p in alert_dir.glob("*.disposition.json")) == [first.name]
     d = load_disposition(first)
     assert d.status == "phishing" and d.note == "real campaign"
 
@@ -238,7 +245,9 @@ def test_list_status_filter(alert_dir):
 
 def test_list_names_a_corrupt_sidecar(alert_dir):
     from arer.cli import main
-    (alert_dir / "salad.eml.disposition.json").write_text("{oops", encoding="utf-8")
+    from arer.alert import read_alerts
+    rec = read_alerts(alert_dir)[0]
+    disposition_path(rec.path).write_text("{oops", encoding="utf-8")
     res = CliRunner().invoke(main, ["alerts", "list", str(alert_dir)])
     assert res.exit_code == 1
-    assert "salad.eml.disposition.json" in res.output
+    assert disposition_path(rec.path).name in res.output

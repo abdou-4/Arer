@@ -151,7 +151,7 @@ def test_campaigns_status_is_combined(campaign_dir):
     from arer.alert import read_alerts
     big = _group_of_two(campaign_dir)
     res = CliRunner().invoke(main, ["alerts", "set", str(campaign_dir),
-                                    read_alerts(campaign_dir)[0].alert.alert_id[:8], "acknowledged"])
+                                    big.alerts[0].alert_id[:8], "acknowledged"])
     assert res.exit_code == 0, res.output
     row = CliRunner().invoke(main, ["alerts", "campaigns", str(campaign_dir)])
     # the pair shows its combined status; no single record's decision leaks into the view
@@ -230,7 +230,7 @@ def test_set_group_overwrites_existing_sidecars(campaign_dir):
     from arer.alert import read_alerts
     from arer.disposition import disposition_path, load_disposition
     big = _group_of_two(campaign_dir)
-    aid = read_alerts(campaign_dir)[0].alert.alert_id[:8]
+    aid = big.alerts[0].alert_id[:8]               # a member of the pair, not a random record
     assert CliRunner().invoke(main, ["alerts", "set", str(campaign_dir), aid, "acknowledged"]).exit_code == 0
     res = CliRunner().invoke(main, ["alerts", "set-group", str(campaign_dir), big.mail_sha256[:8], "benign"])
     assert res.exit_code == 0

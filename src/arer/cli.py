@@ -28,7 +28,8 @@ from .config import ConfigError, load_config
 from .exitcodes import (ALERT_EXITS, ANALYSIS_ERROR_EXIT, EXIT_CODES, EXIT_SEVERITY,
                         exit_code_for, is_alert_exit)
 from .evaluate import _label_of, evaluate, evaluate_history, render
-from .alert import build_alert, is_alert_level, read_alerts, to_json as alert_to_json
+from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alerts,
+                    to_json as alert_to_json, write_alert)
 from .campaign import build_campaigns, campaign_level, campaign_status
 from .disposition import STATUSES, build_disposition, read_disposition, write_disposition
 from .export import export_row, render as render_export
@@ -143,8 +144,8 @@ def _save(cfg, email, verdict, name) -> int:
 @click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Save one <name>.report.json per email in this folder.")
 @click.option("--alerts", "alerts_dir", type=click.Path(file_okay=False, path_type=Path),
-              help="Save one <name>.alert.json per alert-level email (schema arer.alert.v1, "
-                   "see docs/alert-record.md) in this folder.")
+              help="Folder for alert records (one `<alert_id>.alert.json` per alert-level email, "
+                   "schema arer.alert.v1, see docs/alert-record.md).")
 @click.option("--raw", is_flag=True, help="Do not defang saved JSON (keeps real URLs/IPs).")
 @click.option("--skip", multiple=True, help="Analyzer name to skip (repeatable).")
 @click.option("--save/--no-save", default=None,
@@ -202,7 +203,11 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
             (out_dir / f"{p.name}.report.json").write_text(report, encoding="utf-8")
         if alerts_dir and is_alert_level(v.level):
             alert = build_alert(v, email, p.name, cfg)
-            (alerts_dir / f"{p.name}.alert.json").write_text(alert_to_json(alert, defang=not raw), encoding="utf-8")
+            try:
+                write_alert(alert, alerts_dir, defang=not raw)
+            except AlertCollisionError as e:            # never overwrite another mail's record
+                click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+                failed = True
         codes.append(EXIT_CODES[v.level])
 
     if failed:
@@ -237,7 +242,7 @@ def alerts_list(directory, level, status):
         if level and r.alert.verdict.level.value != level:
             continue
         try:
-            d = read_disposition(r.path)
+            d = read_disposition(r.path, r.alert)
         except Exception as e:                       # noqa: BLE001 - DispositionError names the file
             bad += 1
             click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
@@ -317,7 +322,7 @@ def alerts_export(directory, fmt, out_file, raw, level, status):
             click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
             continue
         try:
-            d = read_disposition(r.path)
+            d = read_disposition(r.path, r.alert)
         except Exception as e:                       # noqa: BLE001 - DispositionError names the file
             bad += 1
             click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
@@ -367,7 +372,7 @@ def alerts_campaigns(directory, level, status):
         members = []                                 # (alert, disposition|None), readable members only
         for a, p in zip(c.alerts, c.paths):
             try:
-                d = read_disposition(p)
+                d = read_disposition(p, a)
             except Exception as e:                       # noqa: BLE001 - DispositionError names the file
                 bad += 1
                 click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
@@ -435,7 +440,7 @@ def alerts_stats(directory):
             click.echo(click.style(f"✗ {r.error}", fg="red"), err=True)
             continue
         try:
-            d = read_disposition(r.path)
+            d = read_disposition(r.path, r.alert)
         except Exception as e:                       # noqa: BLE001 - DispositionError names the file
             bad += 1
             click.echo(click.style(f"✗ {safe_text(e, 200)} (excluded from the metrics)", fg="red"), err=True)

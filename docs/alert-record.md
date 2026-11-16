@@ -10,13 +10,25 @@ a contract change like the exit codes in `docs/cli-contract.md`.
 
 ```bash
 arer scan /mail/drop --alerts /alerts
-# one <name>.alert.json per alert-level email; --raw keeps IOCs un-defanged
+# one <alert_id>.alert.json per alert-level email; --raw keeps IOCs un-defanged
 ```
 
 "Alert-worthy" follows the exit-code contract: `SUSPICIOUS`,
-`LIKELY_PHISHING` and `MALICIOUS` (the `exit >= 3` levels). `CLEAN` is not an
-alert, and `INSUFFICIENT_DATA` (exit 6) is a no-decision, not an alert — no
-record is written for either.
+`LIKELY_PHISHING` and `MALICIOUS` (the `ALERT_EXITS` allowlist in
+`arer.exitcodes`). `CLEAN` is not an alert, and `INSUFFICIENT_DATA` (exit 6)
+is a no-decision, not an alert — no record is written for either.
+
+### Record file names are the alert ID (R1.1)
+
+Since the Phase 6 remediation, every record is written as
+`<alert_id>.alert.json` — the immutable event ID, **not** the source file
+name. The source name stays in the record as `source_file` metadata only.
+This makes alert identity collision-proof: two different mails that arrive
+under the same file name can never overwrite each other's record, and an old
+disposition sidecar can never be inherited by a new message. Writes are
+atomic (temp file + rename); an existing record is never silently replaced —
+a same-ID/different-content collision preserves BOTH records and reports an
+integrity error.
 
 ## The record
 

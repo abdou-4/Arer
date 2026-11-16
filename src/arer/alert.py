@@ -21,6 +21,7 @@ exactly like the scan report in report.py.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,12 @@ SCHEMA_VERSION = "arer.alert.v1"
 KNOWN_SCHEMAS = (SCHEMA_VERSION,)      # readers dispatch on this tuple; v2 appends, never replaces
 
 _ALERT_LEVELS = {Level.SUSPICIOUS, Level.LIKELY_PHISHING, Level.MALICIOUS}
+
+
+class AlertCollisionError(RuntimeError):
+    """An alert event file already exists with DIFFERENT content under the
+    same event ID. The existing record is preserved untouched and the new
+    record is written under a suffixed name for investigation (R1.1)."""
 
 
 def is_alert_level(level: Level) -> bool:
@@ -87,6 +94,52 @@ def to_json(a: Alert, defang: bool = True, indent: int = 2) -> str:
         data = clean_deep(data)
         data["schema"] = SCHEMA_VERSION      # machine-readable marker: never defanged
     return json.dumps(data, indent=indent, ensure_ascii=False)
+
+
+def alert_path(a: Alert, directory: Path) -> Path:
+    """The record file for one alert event: `<alert_id>.alert.json`.
+
+    R1.1: the file name is the immutable event ID, NOT the source file name.
+    A second mail that happens to arrive under the same file name can never
+    overwrite the first record, and a disposition sidecar can never attach
+    to a different message by accident."""
+    return Path(directory) / f"{a.alert_id}.alert.json"
+
+
+def write_alert(a: Alert, directory: Path, defang: bool = True) -> Path:
+    """Atomically write one alert record under its event ID.
+
+    Atomic pattern (R1.1): the JSON is written to a temp file in the same
+    directory, flushed and closed, then os.replace()d into a previously
+    unused final name - a crash mid-write can never leave a half-written
+    record, and an existing record is never silently overwritten:
+
+    - no existing file      -> plain replace of the temp file;
+    - same event, same mail -> idempotent no-op (the record stays as-is);
+    - same ID, other mail   -> AlertCollisionError; BOTH records are kept
+      (the existing one untouched, the new one under a `<id>.<rand>.alert.json`
+      name) so nothing is lost for investigation.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    dest = alert_path(a, directory)
+    tmp = directory / f".{a.alert_id}.{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        tmp.write_text(to_json(a, defang=defang), encoding="utf-8")
+        if dest.exists():
+            existing = read_alert(dest)
+            if existing.alert_id == a.alert_id and existing.verdict.sha256 == a.verdict.sha256:
+                return dest                       # the same event already stored
+            alt = directory / f"{a.alert_id}.{uuid.uuid4().hex[:8]}.alert.json"
+            os.replace(tmp, alt)                  # preserve BOTH records
+            raise AlertCollisionError(
+                f"{dest.name}: an alert record with this event ID already exists for mail "
+                f"{existing.verdict.sha256[:12]} (new record preserved as {alt.name})")
+        os.replace(tmp, dest)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return dest
 
 
 # --------------------------------------------------------------------------- #

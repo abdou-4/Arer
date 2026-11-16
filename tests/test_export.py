@@ -118,14 +118,19 @@ def test_render_is_safe_by_default_and_raw_stays_raw():
 
 def test_cli_export_jsonl_to_stdout_and_file(tmp_path):
     from arer.cli import main
+    from arer.alert import read_alerts
     d = make_queue(tmp_path)
+    rec = read_alerts(d)[0]
     out = CliRunner().invoke(main, ["alerts", "export", str(d)])
     assert out.exit_code == 0, out.output
     assert json.loads(out.output.splitlines()[0])["schema"] == "arer.alert.v1"
     f = tmp_path / "dump" / "alerts.jsonl"
     to_file = CliRunner().invoke(main, ["alerts", "export", str(d), "-o", str(f)])
     assert to_file.exit_code == 0 and "exported 1 alert" in to_file.output
-    assert json.loads(f.read_text(encoding="utf-8").splitlines()[0])["record_file"] == "salad[.]eml[.]alert[.]json"  # defanged like every mail-derived name
+    # R1.1: the record file name is the immutable alert_id, not the mail name;
+    # it is defanged like every string in the export (safe-by-default)
+    from arer.util.defang import clean
+    assert json.loads(f.read_text(encoding="utf-8").splitlines()[0])["record_file"] == clean(rec.path.name)
 
 
 def test_cli_export_csv(tmp_path):
@@ -140,26 +145,32 @@ def test_cli_export_csv(tmp_path):
 
 def test_cli_export_filters(tmp_path):
     from arer.cli import main
+    from arer.alert import read_alerts
+    from arer.util.defang import clean
     d = make_queue(tmp_path)
+    rec_name = clean(read_alerts(d)[0].path.name)   # export defangs file names too
     alert = read_alerts(d)[0].alert
     CliRunner().invoke(main, ["alerts", "set", str(d), alert.alert_id[:8], "benign"])
     hit = CliRunner().invoke(main, ["alerts", "export", str(d), "--status", "benign"])
-    assert hit.exit_code == 0 and "salad[.]eml[.]alert[.]json" in hit.output
+    assert hit.exit_code == 0 and rec_name in hit.output
     miss = CliRunner().invoke(main, ["alerts", "export", str(d), "--status", "new"])
-    assert miss.exit_code == 0 and "salad[.]eml[.]alert[.]json" not in miss.output
+    assert miss.exit_code == 0 and rec_name not in miss.output
     miss2 = CliRunner().invoke(main, ["alerts", "export", str(d), "--level", "MALICIOUS"])
-    assert miss2.exit_code == 0 and "salad[.]eml[.]alert[.]json" not in miss2.output
+    assert miss2.exit_code == 0 and rec_name not in miss2.output
 
 
 def test_cli_export_names_corrupt_files_and_still_exports(tmp_path):
     from arer.cli import main
+    from arer.alert import read_alerts
+    from arer.util.defang import clean
     d = make_queue(tmp_path)
+    rec_name = clean(read_alerts(d)[0].path.name)
     (d / "corrupt.alert.json").write_text("{oops", encoding="utf-8")
     res = CliRunner().invoke(main, ["alerts", "export", str(d)])
     assert res.exit_code == 1
     assert "corrupt.alert.json" in res.output
     json_line = next(l for l in res.output.splitlines() if l.startswith("{"))   # stderr is interleaved first
-    assert json.loads(json_line)["record_file"] == "salad[.]eml[.]alert[.]json"
+    assert json.loads(json_line)["record_file"] == rec_name
     assert "exported, 1 unreadable" in res.output
 
 

@@ -113,13 +113,37 @@ def load_disposition(path: Path) -> Disposition:
         raise DispositionError(f"{path.name}: invalid {schema} record (bad field(s): {fields})") from None
 
 
-def read_disposition(alert_path: Path) -> Disposition | None:
-    """The sidecar of one alert record. None when absent; DispositionError when
-    present but unreadable."""
+def read_disposition(alert_path: Path, alert: "Alert | None" = None,
+                     *, expect_alert_id: str = "", expect_mail_sha256: str = "") -> Disposition | None:
+    """The sidecar of one alert record (alert is an arer.alert.Alert). None when absent; DispositionError when
+    present but unreadable OR when it does not belong to the alert (R1.2).
+
+    Linkage validation (R1.2): pass the alert record (or its alert_id and
+    mail sha256) and the sidecar must name EXACTLY that alert_id, and exactly
+    that sha256 when the alert has one. An orphan, stale or mismatched
+    sidecar is an integrity error - its status is NEVER silently applied,
+    and a mismatch is never "repaired" by copying the old decision onto the
+    new alert. All queue commands (list, stats, export, campaigns, set-group)
+    go through this same validation path.
+    """
     p = disposition_path(alert_path)
     if not p.is_file():
         return None
-    return load_disposition(p)
+    d = load_disposition(p)
+    aid = expect_alert_id or (getattr(alert, "alert_id", "") if alert is not None else "")
+    sha = expect_mail_sha256 or (getattr(getattr(alert, "verdict", None), "sha256", "")
+                                 if alert is not None else "")
+    if aid and d.alert_id != aid:
+        raise DispositionError(
+            f"{p.name}: alert_id mismatch - sidecar says '{d.alert_id[:12]}', "
+            f"record says '{aid[:12]}'. The disposition was NOT applied "
+            "(delete or rewrite the sidecar; see docs/dispositions.md).")
+    if sha and d.mail_sha256 and d.mail_sha256 != sha:
+        raise DispositionError(
+            f"{p.name}: mail sha256 mismatch - sidecar says '{d.mail_sha256[:12]}', "
+            f"record says '{sha[:12]}'. The disposition was NOT applied "
+            "(delete or rewrite the sidecar; see docs/dispositions.md).")
+    return d
 
 
 def write_disposition(d: Disposition, alert_path: Path) -> Path:
