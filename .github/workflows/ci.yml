@@ -15,11 +15,16 @@ on:
 # releases, so the suite is pinned to official CPython builds via setup-python,
 # and uv only syncs dependencies against that exact interpreter.
 # - Job "3.13.5": pinned official build, the environment the suite is verified
-#   green on (291+ tests, 0 failures).
-# - Job "3.13 (latest)": continue-on-error, so the known breakage shows up as a
-#   visible expected-failure signal instead of a red pipeline.
+#   green on (310 tests, 0 failures). This job is the required signal and runs
+#   the full suite with no exclusions.
+# - Job "3.13 (latest)": runs the suite minus the two known-broken tests, so
+#   any *new* regression is still a hard red. The two known-broken tests run
+#   separately in a sentinel step that reports via workflow annotations
+#   (::warning:: when they fail as expected, ::notice:: once they pass). This
+#   keeps the whole run green without hiding the known breakage.
 # TODO: make parse_html robust across both parser behaviors (detection-baseline
-# change -> needs its own measured commit), then drop the pin and this job.
+# change -> needs its own measured commit), then drop the pin, the deselect
+# logic and the sentinel step.
 
 jobs:
   test:
@@ -31,11 +36,18 @@ jobs:
         include:
           - python-version: "3.13.5"
             os: ubuntu-24.04        # 3.13.5 has no build for ubuntu-latest (26.04)
-            continue-on-error: false
+            allow_known_broken: false
           - python-version: "3.13"
             os: ubuntu-latest
-            continue-on-error: true
-    continue-on-error: ${{ matrix.continue-on-error }}
+            allow_known_broken: true
+    env:
+      # Tests that depend on the pre-hardening html.parser CDATA behavior (see
+      # the CVE-2025-6069 note above). On interpreters where they are known to
+      # fail they are deselected from the main run and executed separately as a
+      # visible sentinel step instead of failing the whole job.
+      KNOWN_BROKEN: >-
+        tests/test_phase5c.py::test_tag_salad_is_detected
+        tests/test_phase5c.py::test_counters
     steps:
       - uses: actions/checkout@v4
 
@@ -78,4 +90,28 @@ jobs:
         run: uv sync --frozen --python "$(command -v python3.13)"
 
       - name: Run tests
-        run: uv run pytest -q
+        run: |
+          if [ "${{ matrix.allow_known_broken }}" = "true" ]; then
+            deselect_args=()
+            for t in $KNOWN_BROKEN; do
+              deselect_args+=(--deselect "$t")
+            done
+            uv run pytest -q "${deselect_args[@]}"
+          else
+            # Pinned job: full suite, no exclusions - this is the required
+            # signal that everything works on the verified-green interpreter.
+            uv run pytest -q
+          fi
+
+      - name: Known-breakage sentinel (CVE-2025-6069 html.parser hardening)
+        if: matrix.allow_known_broken
+        run: |
+          pytest_args=()
+          for t in $KNOWN_BROKEN; do
+            pytest_args+=("$t")
+          done
+          if uv run pytest -q "${pytest_args[@]}"; then
+            echo "::notice title=html.parser sentinel green::The known-broken tests now pass on this interpreter. Consider dropping the 3.13.5 pin (see TODO in ci.yml)."
+          else
+            echo "::warning title=html.parser sentinel red (expected)::The two CVE-2025-6069-hardening tests fail on this interpreter as tracked in the ci.yml header. Full-suite correctness is covered by the required 3.13.5 job."
+          fi
