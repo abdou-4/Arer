@@ -47,6 +47,11 @@ pip-wheel-metadata/
 /data/samples/*
 !/data/samples/README.md
 
+# Private diagnostic scripts (run on local/private mail folders, output may
+# reflect dataset contents) - keep them local, never commit them.
+/scripts/diagnose_bidi_url_private.py
+/scripts/unicode_private_audit.py
+
 # Editor and operating-system files
 .idea/
 .DS_Store
