@@ -40,6 +40,7 @@ def cfg(tmp_path):
 
 
 def save(cfg, email, label=None, analyzers=None):
+    email.file.sha256_verified = True              # fixtures stand in for native .eml input (R1.6)
     v = run_pipeline(email, cfg, analyzers=analyzers if analyzers is not None else [Sender()])
     s = HistoryStore.open(cfg.history.db_path, create=True)
     s.save_scan(v.sha256, email.file.name or "x.eml", email, v, extract_indicators(email, cfg), logic_hash(cfg))

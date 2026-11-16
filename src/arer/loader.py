@@ -3,9 +3,19 @@ loader.py - reads a parser JSON file from disk and returns a validated Email.
 
 This is the trust boundary between the filesystem and the analyzers: nothing
 unvalidated gets past here. It never opens, runs or fetches anything inside the email.
+
+R1.6 identity rule: a native .eml/.msg is hashed from its actual bytes and
+marked sha256_verified=True; a parser-JSON input carries a CLAIMED source
+hash that cannot be proven here - it stays as email.file.sha256 (so verdict
+reporting and eval dedup keep working) but is flagged sha256_verified=False,
+and the verified hash of the JSON artifact itself is recorded separately in
+email.file.artifact_sha256. History writes refuse unverified identities
+(HistoryStore.save_scan), so a tampered claimed hash can never merge cases,
+inherit labels or authorize exports.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -78,7 +88,14 @@ def load_email(path: str | Path, cfg: Config | None = None) -> Email:
     if not {"envelope", "body"} & raw.keys():
         raise LoadError(f"{p.name}: does not look like parser output (no 'envelope' or 'body')")
 
-    return _build(raw, p.name)
+    email = _build(raw, p.name)
+    # R1.6: the sha256 inside a parser JSON is CLAIMED metadata - the original
+    # message bytes are not available here to prove it. Keep it as the sample
+    # identity (reports, eval dedup), but flag it unverified and record the
+    # verified hash of the JSON artifact itself.
+    email.file.sha256_verified = False
+    email.file.artifact_sha256 = _sha256_of(p)
+    return email
 
 
 def _build(raw: dict, name: str) -> Email:
@@ -86,6 +103,14 @@ def _build(raw: dict, name: str) -> Email:
         return Email.from_parser_json(raw)
     except ValidationError as e:
         raise LoadError(f"{name}: failed validation ({e.error_count()} errors)") from e
+
+
+def _sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def load_any(path: str | Path, cfg: Config | None = None, trust: str | None = None) -> Email:
@@ -109,13 +134,20 @@ def load_any(path: str | Path, cfg: Config | None = None, trust: str | None = No
         raise LoadError(f"{p.name} is {p.stat().st_size / 1e6:.1f} MB, limit is {cfg.limits.max_eml_mb} MB")
 
     from .mail_parser import parse_mail_file, to_json     # lazy: .json scans never need it
+    actual_sha = _sha256_of(p)
     try:
         # payload is embedded only so magic bytes can be read; Attachment.from_raw drops it
         data = parse_mail_file(p, trust=trust, include_attachment_payload=True)
         raw = json.loads(to_json(data, None))              # same round-trip as a saved file
     except Exception as e:                                 # noqa: BLE001 - library errors vary
         raise LoadError(f"{p.name}: parser failed ({type(e).__name__}: {str(e)[:150]})") from e
-    return _build(raw, p.name)
+    email = _build(raw, p.name)
+    claimed = email.file.sha256
+    if claimed and claimed != actual_sha:
+        raise LoadError(f"{p.name}: file changed during scan (claimed sha256 {claimed[:12]}, actual {actual_sha[:12]})")
+    email.file.sha256 = actual_sha                        # native input: identity from the real bytes
+    email.file.sha256_verified = True
+    return email
 
 
 def load_dir(directory: str | Path, cfg: Config | None = None

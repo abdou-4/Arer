@@ -69,7 +69,15 @@ class Address(_Base):
 
 
 class FileInfo(_Base):
-    """parsed["file"]: where the sample came from, and its hashes."""
+    """parsed["file"]: where the sample came from, and its hashes.
+
+    R1.6 identity discipline: `sha256` is only a VERIFIED message identity
+    when `sha256_verified` is True (native .eml/.msg input, hashed from the
+    actual bytes). For parser-JSON input the claimed sha256 is UNVERIFIED
+    user-provided metadata - it must never silently merge cases, inherit
+    labels or authorize history writes. `artifact_sha256` is the verified
+    hash of the JSON artifact itself (computed by the loader).
+    """
     path: str = ""
     name: str = ""
     format: str = "eml"
@@ -77,6 +85,9 @@ class FileInfo(_Base):
     md5: str = ""
     sha1: str = ""
     sha256: str = ""
+    sha256_verified: bool = False
+    artifact_sha256: str = ""
+    generated_by: str = ""             # provenance note from the parser JSON, if any
 
     @classmethod
     def from_raw(cls, raw: dict) -> "FileInfo":
@@ -87,6 +98,7 @@ class FileInfo(_Base):
             format=_s(raw.get("format")) or "eml",
             size_bytes=raw.get("size_bytes") or 0,
             md5=_s(h.get("md5")), sha1=_s(h.get("sha1")), sha256=_s(h.get("sha256")),
+            generated_by=_s(raw.get("generated_by")),
         )
 
 

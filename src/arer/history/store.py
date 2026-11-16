@@ -125,9 +125,18 @@ class HistoryStore:
 
     # ---- writing ------------------------------------------------------------ #
     def save_scan(self, sha: str, name: str, email: Email, verdict: Verdict, indicators, logic: str) -> int:
-        """Insert or refresh a scan (keeps its label). Returns how many times it has now been seen."""
+        """Insert or refresh a scan (keeps its label). Returns how many times it has now been seen.
+
+        R1.6: refuses UNVERIFIED identities. A parser-JSON input's claimed
+        sha256 cannot be proven here; saving it would let a tampered hash
+        merge cases and inherit YOUR labels. Rescan the original .eml to
+        store it in history."""
         if not sha:
             raise ValueError("this e-mail has no SHA-256, so it cannot be saved")
+        if not getattr(email, "file", None).sha256_verified:
+            raise ValueError("this scan has no verified SHA-256 (parser-JSON input): the claimed source hash "
+                             "cannot be proven, so it will not be saved to history or labeled. "
+                             "Rescan the original .eml/.msg file instead")
         now = now_iso()
         with self.conn:
             old = self.conn.execute("SELECT times FROM scans WHERE sha256=?", (sha,)).fetchone()

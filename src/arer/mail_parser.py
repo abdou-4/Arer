@@ -1,4 +1,4 @@
-"""Extract everything mail-parser 4.8.0 exposes from .eml / .msg files.
+"""Extract everything the installed mail-parser exposes from .eml / .msg files.
 
 Public API
 ----------
@@ -16,8 +16,15 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from importlib.metadata import version as _dist_version
+
 from mailparser import MailParser
 from mailparser.exceptions import MailParserError
+
+try:                                    # the real installed backend version (R6.6)
+    MAIL_PARSER_VERSION = _dist_version("mail-parser")
+except Exception:                       # noqa: BLE001 - never fail a scan over metadata
+    MAIL_PARSER_VERSION = "unknown"
 
 OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # Outlook .msg container
 SUPPORTED_SUFFIXES = {".eml", ".msg"}
@@ -181,7 +188,10 @@ def parse_mail_file(
             "size_bytes": len(raw),
             "hashes": _hashes(raw),
             "parsed_at": datetime.now(timezone.utc).isoformat(),
-            "mail_parser_version": "4.8.0",
+            "mail_parser_version": MAIL_PARSER_VERSION,
+            # provenance note (R1.6): says THIS json came from arer's parser;
+            # it does NOT prove the file was not edited afterwards
+            "generated_by": "arer mail_parser",
         },
         "envelope": {
             "subject": parser.subject,

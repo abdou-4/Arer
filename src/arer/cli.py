@@ -127,6 +127,8 @@ def _save(cfg, email, verdict, name) -> int:
     store = HistoryStore.open(cfg.history.db_path, create=True)
     try:
         return store.save_scan(verdict.sha256, name, email, verdict, extract_indicators(email, cfg), logic_hash(cfg))
+    except ValueError:                          # R1.6: unverified claimed hash (parser-JSON input)
+        return 0                                # caller prints the note; the scan itself is unaffected
     finally:
         store.close()
 
@@ -196,7 +198,10 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, sk
 
         if save if save is not None else cfg.history.auto_save:
             times = _save(cfg, email, v, p.name)
-            if not quiet:
+            if times == 0:
+                click.echo(click.style("history: not saved - this scan has no verified SHA-256 "
+                                       "(parser-JSON input). Rescan the original .eml/.msg to store it.", fg="yellow"))
+            elif not quiet:
                 click.echo(f"history: saved ({'first time' if times == 1 else f'seen {times} times'}). "
                            f"Label it with: arer label {v.sha256[:12]} phish|legit")
 
@@ -563,9 +568,12 @@ def label_cmd(target, label, note, config_dir):
             try:
                 email = load_any(p, cfg)
             except LoadError as e:
-                raise click.ClickException(safe_text(e, 200))
+                raise click.ClickException(safe_text(e, 200)) from e
             v = run_pipeline(email, cfg)
-            store.save_scan(v.sha256, p.name, email, v, extract_indicators(email, cfg), logic_hash(cfg))
+            try:
+                store.save_scan(v.sha256, p.name, email, v, extract_indicators(email, cfg), logic_hash(cfg))
+            except ValueError as e:                     # R1.6: unverified claimed hash
+                raise click.ClickException(safe_text(e, 240)) from e
             sha = v.sha256
         else:
             sha = store.resolve(target)
@@ -659,7 +667,12 @@ def history_import(root, skip_dirs, config_dir):
                 click.echo(click.style(f"✗ {safe_text(e, 160)}", fg="red"), err=True)
                 continue
             v = run_pipeline(email, cfg, skip={"history"})        # stored findings must not depend on the history itself
-            store.save_scan(v.sha256, p.name, email, v, extract_indicators(email, cfg), logic_hash(cfg))
+            try:
+                store.save_scan(v.sha256, p.name, email, v, extract_indicators(email, cfg), logic_hash(cfg))
+            except ValueError as e:                     # R1.6: unverified claimed hash (parser-JSON sample)
+                failed += 1
+                click.echo(click.style(f"✗ {safe_text(p.name, 80)}: {safe_text(e, 160)}", fg="red"), err=True)
+                continue
             store.set_label(v.sha256, lab)
             n += 1
     finally:
