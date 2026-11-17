@@ -45,3 +45,33 @@ top senders   news[@]discord[.]com 12, hr[@]corp-example[.]com 5
 v1 is text-only, over one queue folder. Machine-readable flattening for
 SIEM/SOAR already exists (`alerts export`, Phase 6.3); when a dashboard
 needs more than `stats` prints, that is where the raw data comes from.
+
+## Analyst feedback metrics (R7)
+
+`alerts stats` also reports:
+
+- **alerts per week** — alert CASES per ISO week (deduplicated by sha256);
+  the separate `events` column counts every record. Five copies of one
+  phishing run are one case and five events — never mixed.
+- **noisy rules** — per finding ID: the false-alarm rate over CLASSIFIED
+  cases containing the finding (analyst `benign` / `analyst `phishing``),
+  the reviewed count and the unresolved count. DENOMINATORS ARE ANALYST
+  DECISIONS ONLY: tool decisions, legacy v1 sidecars (legacy_unverified),
+  imports and unreviewed records never enter a rate. A rate over fewer than
+  5 reviewed cases is flagged `low-confidence`, never presented as proof.
+
+Case class: a case counts as phishing if ANY of its records carries an
+analyst `phishing` decision, else benign if any carries an analyst `benign`;
+acknowledged-only cases are reviewed but unclassified and stay outside every
+rate denominator.
+
+## Markdown case summary (R7.3)
+
+`alerts show DIR ALERT_ID --markdown` renders one durable, paste-ready
+document: case id, verdict/score/categories, analysis completeness, top
+reasons with points, evidence, indicators (defanged; `--raw` shows live
+values), campaign membership with the linking-key evidence and the analyst
+state, workflow + provenance, and the logic/config hashes. All untrusted
+text (subject, sender, filename, note, evidence) is Markdown-escaped and
+length-limited; no links are ever emitted; the summary lists the evidence
+that affected the result and does not claim the rules prove intent.

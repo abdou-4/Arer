@@ -367,14 +367,48 @@ def alerts_list(directory, level, status):
 @alerts.command("show")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.argument("alert_id")
-def alerts_show(directory, alert_id):
+@click.option("--markdown", is_flag=True,
+              help="Render a Markdown CASE summary (R7.3): verdict, reasons, indicators "
+                   "(defanged), campaign, workflow and reproducibility hashes.")
+@click.option("--raw", is_flag=True, help="Show live (un-defanged) indicators in the summary.")
+def alerts_show(directory, alert_id, markdown, raw):
     """Print the full record with id matching ALERT_ID (6+ characters is enough)."""
-    matches = {r.alert.alert_id: r.path for r in read_alerts(directory)
-               if r.alert and r.alert.alert_id.startswith(alert_id)}
+    matches = [r for r in read_alerts(directory)
+               if r.alert and r.alert.alert_id.startswith(alert_id)]
     if len(matches) != 1:
         hint = "several match, give more characters" if len(matches) > 1 else "no alert record matches that"
         raise click.ClickException(hint + " (copy the alert_id from: arer alerts list DIRECTORY)")
-    click.echo(matches.popitem()[1].read_text(encoding="utf-8"), nl=False)
+    r = matches[0]
+    if not markdown:
+        click.echo(r.path.read_text(encoding="utf-8"), nl=False)
+        return
+    from .casesummary import render_markdown
+    from .campaign import build_clusters
+    d = None
+    try:
+        d = read_disposition(r.path, r.alert)
+    except Exception as e:                              # noqa: BLE001 - integrity errors are named
+        click.echo(click.style(f"✗ {safe_text(e, 200)} (summary continues without a disposition)", fg="yellow"), err=True)
+    campaign = None
+    campaign_state = ""
+    for c in build_clusters(read_alerts(directory)):
+        if r.alert.verdict.sha256 in c.mail_sha256s and len(c.mail_sha256s) > 1:
+            campaign = {"campaign_id": c.campaign_id, "mail_sha256s": c.mail_sha256s, "keys": c.keys}
+            break
+    try:
+        cfg = load_config(None)
+        store = HistoryStore.open(cfg.history.db_path, readonly=True)
+        if store is not None:
+            try:
+                cur = store.current_decision(campaign["campaign_id"]) if campaign else None
+                if cur and cur["kind"] == "campaign":
+                    campaign_state = cur["value"]
+            finally:
+                store.close()
+    except Exception:                                   # noqa: BLE001 - provenance is best-effort here
+        pass
+    click.echo(render_markdown(r.alert, d, record_file=r.path.name,
+                               campaign=campaign, campaign_state=campaign_state, raw=raw), nl=False)
 
 
 @alerts.command("set")
@@ -823,6 +857,14 @@ def alerts_stats(directory):
         click.echo(f"no alert records in {directory}")
         return
     click.echo(render_queue_stats(queue_stats(pairs)))
+    # R7: analyst-feedback metrics - analyst-provenance decisions only
+    from .metrics import finding_metrics, render_finding_stats, render_weekly, weekly_alerts
+    click.echo("")
+    click.echo("alerts per week (cases; duplicate scans are events, not cases)")
+    click.echo(render_weekly(weekly_alerts(pairs)))
+    click.echo("")
+    click.echo("noisy rules (analyst decisions only; legacy/tool/import never count)")
+    click.echo(render_finding_stats(finding_metrics(pairs)))
     if bad:
         sys.exit(1)
 

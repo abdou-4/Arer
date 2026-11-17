@@ -29,7 +29,8 @@ Definitions (frozen here, documented in docs/metrics.md):
 """
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from statistics import median
 from typing import NamedTuple
@@ -128,4 +129,119 @@ def render_queue_stats(s: QueueStats) -> str:
                                      if s.oldest_new_age_hours is not None else "queue is clear"))
     senders = ", ".join(f"{name} {n}" for name, n in s.top_senders) or "none recorded"
     lines.append(f"top senders   {senders}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# R7: analyst feedback metrics. Definitions (frozen here, docs/metrics.md):
+#
+# The denominators come from ANALYST decisions only (disposition.provenance
+# == analyst): tool decisions, legacy v1 sidecars (legacy_unverified),
+# imports and unreviewed records never enter a rate. Duplicate scans of the
+# same mail are ONE case (verdict.sha256) - an event-level view is kept
+# separate and never mixed into the case-level numbers.
+#
+# - reviewed case        a case (sha) with at least one analyst-provenance
+#                        decision among its records;
+# - case class           phishing if ANY analyst `phishing` record, else
+#                        benign if ANY analyst `benign` record, else undecided
+#                        (acknowledged-only cases are reviewed but carry no
+#                        class and are excluded from rate denominators);
+# - per-finding FP rate  benign cases containing the finding / classified
+#                        cases containing the finding;
+# - noisy-rule ranking   findings by that rate, with the reviewed count and
+#                        the unresolved count; below MIN_SAMPLES the rate is
+#                        flagged low-confidence, never presented as proof.
+# --------------------------------------------------------------------------- #
+
+MIN_SAMPLES = 5
+
+
+@dataclass(frozen=True)
+class FindingStat:
+    finding_id: str
+    reviewed: int          # cases with a class, containing the finding
+    false_alarms: int      # of those, benign cases
+    unresolved: int        # cases containing the finding with NO analyst decision yet
+    low_confidence: bool   # reviewed < MIN_SAMPLES
+
+    @property
+    def fp_rate(self) -> float | None:
+        return self.false_alarms / self.reviewed if self.reviewed else None
+
+
+def _case_class(pairs: list[tuple[Alert, "Disposition | None"]], sha: str) -> str | None:
+    classes = set()
+    for a, d in pairs:
+        if a.verdict.sha256 != sha or d is None:
+            continue
+        if d.effective_provenance != "analyst":
+            continue
+        if d.status == "phishing":
+            classes.add("phishing")
+        elif d.status == "benign":
+            classes.add("benign")
+    if "phishing" in classes:
+        return "phishing"
+    if "benign" in classes:
+        return "benign"
+    return None
+
+
+def finding_metrics(pairs: list[tuple[Alert, "Disposition | None"]],
+                    *, min_samples: int = MIN_SAMPLES) -> list[FindingStat]:
+    """Per-finding feedback over CASES (deduplicated by verdict.sha256)."""
+    seen: dict[str, set[str]] = {}
+    klass: dict[str, str | None] = {}
+    for a, d in pairs:
+        sha = a.verdict.sha256
+        if sha not in klass:
+            klass[sha] = _case_class(pairs, sha)
+        for f in a.verdict.findings:
+            seen.setdefault(f.id, set()).add(sha)
+    out = []
+    for fid, shas in seen.items():
+        reviewed = sum(1 for s in shas if klass[s])
+        false_alarms = sum(1 for s in shas if klass[s] == "benign")
+        unresolved = sum(1 for s in shas if klass[s] is None)
+        out.append(FindingStat(fid, reviewed, false_alarms, unresolved, reviewed < min_samples))
+    return sorted(out, key=lambda s: (-(s.fp_rate or 0.0), -s.reviewed, s.finding_id))
+
+
+def weekly_alerts(pairs: list[tuple[Alert, "Disposition | None"]]) -> list[tuple[str, int, int]]:
+    """Alert CASES per ISO week, oldest first: (week, cases, events). The
+    event count is kept separate - five copies of one phishing run are one
+    case and five events."""
+    weeks: dict[str, set[str]] = defaultdict(set)
+    events: dict[str, int] = defaultdict(int)
+    for a, _d in pairs:
+        try:
+            dt = datetime.strptime(a.generated_utc, "%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            continue
+        week = f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+        weeks[week].add(a.verdict.sha256)
+        events[week] += 1
+    return [(w, len(weeks[w]), events[w]) for w in sorted(weeks)]
+
+
+def render_finding_stats(stats: list[FindingStat], *, limit: int = 10) -> str:
+    """The noisy-rule table: rate + counts, low-confidence rows flagged."""
+    lines = [f"  {'finding':<34}{'FP rate':>9}{'false':>7}{'reviewed':>10}{'unresolved':>12}"]
+    rows = [s for s in stats if s.reviewed or s.unresolved][:limit]
+    if not rows:
+        return "  no reviewed findings yet"
+    for s in rows:
+        rate = f"{100 * s.fp_rate:.0f}%" if s.fp_rate is not None else "-"
+        flag = "  <- low-confidence" if s.low_confidence else ""
+        lines.append(f"  {s.finding_id:<34}{rate:>9}{s.false_alarms:>7}{s.reviewed:>10}{s.unresolved:>12}{flag}")
+    return "\n".join(lines)
+
+
+def render_weekly(rows: list[tuple[str, int, int]], *, limit: int = 12) -> str:
+    if not rows:
+        return "  no alert records yet"
+    lines = [f"  {'week':<10}{'cases':>7}{'events':>8}"]
+    for week, cases, events in rows[-limit:]:
+        lines.append(f"  {week:<10}{cases:>7}{events:>8}")
     return "\n".join(lines)
