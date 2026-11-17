@@ -29,6 +29,8 @@ except Exception:                       # noqa: BLE001 - never fail a scan over 
 OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # Outlook .msg container
 SUPPORTED_SUFFIXES = {".eml", ".msg"}
 
+_MAX_HEADERS = 5000                   # hostile header counts are bounded at the parser boundary (R6.1)
+
 URL_RE = re.compile(r"""https?://[^\s<>"'\)\]]+""", re.IGNORECASE)
 HREF_RE = re.compile(
     r"""<a\s[^>]*?href\s*=\s*["']?([^"'\s>]+)["']?[^>]*>(.*?)</a>""",
@@ -89,7 +91,12 @@ def detect_format(path: Path) -> str:
 
 def _load(path: Path, fmt: str) -> MailParser:
     if fmt == "msg":
-        # needs: pip install "mail-parser[outlook]"  (extract-msg backend)
+        try:
+            import extract_msg  # noqa: F401 - presence check for the actionable message
+        except ImportError as e:
+            raise RuntimeError(
+                "parsing .msg needs the Outlook backend: pip install 'arer[outlook]' "
+                "(or pip install 'mail-parser[outlook]')") from e
         return MailParser.from_file_msg(str(path))
     return MailParser.from_file(str(path))
 
@@ -176,6 +183,8 @@ def parse_mail_file(
     parser = _load(path, fmt)
 
     raw_headers = [[k, str(v)] for k, v in (parser.message.items() if parser.message else [])]
+    if len(raw_headers) > _MAX_HEADERS:                 # R6.1: hostile header counts are bounded
+        raw_headers = raw_headers[:_MAX_HEADERS]
     lowered = {}
     for k, v in raw_headers:
         lowered.setdefault(k.lower(), []).append(v)

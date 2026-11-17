@@ -56,7 +56,10 @@ def drop_with(tmp_path: Path, *names: str) -> Path:
 def test_scan_command_builds_the_real_scan_argv(tmp_path):
     mail = tmp_path / "p.eml"
     cmd = scan_command(mail, tmp_path / "queue", ("intel", "history"))
-    assert cmd[:5] == [str(Path(__import__("sys").executable)), "-m", "arer", "scan", str(mail)]
+    # R6.4: options first, then an explicit `--` separator before the mail
+    assert cmd[:6] == [str(Path(__import__("sys").executable)), "-m", "arer", "scan", "-q",
+                       "--alerts"]
+    assert cmd[-2:] == ["--", str(mail)]
     assert "-q" in cmd and "--alerts" in cmd and str(tmp_path / "queue") in cmd
     assert cmd[cmd.index("--skip") + 1] == "intel"
 
@@ -116,7 +119,7 @@ def test_one_failure_never_stops_the_pass(tmp_path):
     outcomes = {}
 
     def run(argv, timeout):
-        name = Path(argv[4]).name
+        name = Path(argv[-1]).name
         if name == "b.eml":
             raise subprocess.TimeoutExpired(argv, timeout)
         return subprocess.CompletedProcess(argv, 0, stdout="CLEAN  x", stderr="")

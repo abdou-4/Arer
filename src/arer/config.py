@@ -193,8 +193,14 @@ def _read_list(path: Path) -> frozenset[str]:
 
 
 def load_config(config_dir: str | Path | None = None) -> Config:
-    """Load and validate config. Dir: argument > $PHISHSCOPE_CONFIG > ./config"""
-    base = Path(config_dir or os.environ.get("PHISHSCOPE_CONFIG") or DEFAULT_CONFIG_DIR)
+    """Load and validate config. Dir: argument > $PHISHSCOPE_CONFIG > ./config
+    (so a wheel install finds the operator's config next to the CWD) >
+    DEFAULT_CONFIG_DIR (the source checkout's config/)."""
+    chosen = config_dir or os.environ.get("PHISHSCOPE_CONFIG")
+    if not chosen:
+        cwd_config = Path("config")
+        chosen = cwd_config if (cwd_config / "rules.yaml").is_file() else DEFAULT_CONFIG_DIR
+    base = Path(chosen)
     rules = base / "rules.yaml"
     if not rules.is_file():
         raise ConfigError(f"rules.yaml not found in {base}")

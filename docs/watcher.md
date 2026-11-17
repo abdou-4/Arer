@@ -75,3 +75,20 @@ $ arer watch ~/drop --once                # one pass, then exit (cron-friendly)
 produces are the Phase 6.1/6.2 records, and the menu ("Watch a mail drop")
 runs the same command. `src/arer/__main__.py` (added in this phase) makes
 `python -m arer scan ...` the canonical way to spawn an isolated scan.
+
+
+## Hardening (R6)
+
+- single-instance lock: a second `arer watch` on the same drop refuses to
+  start (`.arer-watch.lock` with the holder pid; a stale lock from a dead
+  holder is taken over);
+- SIGTERM stops the watcher gracefully after the current pass;
+- scan subprocess output is BOUNDED (1 MB per stream) and a timeout kills
+  the WHOLE process group - no descendant survives;
+- non-regular files (FIFOs, sockets, devices, symlinks) are skipped via
+  lstat; a file rewritten during its scan is a failed intake, never a
+  verdict over mixed bytes (size+mtime compared before/after);
+- `--min-age SECONDS` leaves files modified within the last N seconds for
+  the next pass (half-written transfers); producers that rename atomically
+  can keep it off;
+- dash-leading filenames are safe (options first, then an explicit `--`).

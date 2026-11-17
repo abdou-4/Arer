@@ -32,6 +32,12 @@ dependencies = [
 ]
 
 
+[project.optional-dependencies]
+# .msg (Outlook) support: the parser needs the extract-msg backend; without
+# it, .msg input fails with an actionable install message (R6.6).
+outlook = ["extract-msg>=0.14"]
+
+
 [project.scripts]
 arer = "arer.cli:main"
 

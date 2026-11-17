@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -100,10 +101,17 @@ def main(ctx: click.Context, verbose: bool):
               help="Also write attachments to <output>/attachments/ (live malware on disk!).")
 @click.option("--full", is_flag=True, help="Also embed mail-parser's own mail/mail_partial views.")
 @click.option("--compact", is_flag=True, help="Single-line JSON.")
-def parse(input, output, recursive, trust, include_payload, extract_attachments, full, compact):
+@click.option("--config", "config_dir", type=click.Path(exists=True, file_okay=False),
+              help="Config folder (for the size limits).")
+def parse(input, output, recursive, trust, include_payload, extract_attachments, full, compact, config_dir):
     """Convert .eml/.msg file(s) into JSON."""
     from .mail_parser import SUPPORTED_SUFFIXES, parse_mail_file, to_json as parser_json
 
+    try:
+        cfg = load_config(config_dir)
+        max_bytes = cfg.limits.max_eml_mb * 1024 * 1024
+    except ConfigError:
+        max_bytes = None                                # unusable config must not block a parse
     files = collect(input, recursive, SUPPORTED_SUFFIXES)
     if not files:
         click.echo(f"no .eml/.msg files found in {input}", err=True)
@@ -114,6 +122,10 @@ def parse(input, output, recursive, trust, include_payload, extract_attachments,
     for f in files:
         out_file = output / f"{f.name}.json"            # mail.eml -> mail.eml.json
         try:
+            # R6.1: `parse` sits behind the SAME size boundary as `scan`
+            if max_bytes is not None and f.stat().st_size > max_bytes:
+                raise LoadError(f"{f.name} is {f.stat().st_size / 1e6:.1f} MB, "
+                                f"limit is {cfg.limits.max_eml_mb} MB (max_eml_mb)")
             att_dir = output / "attachments" / f.name if extract_attachments else None
             data = parse_mail_file(f, trust=trust, include_attachment_payload=include_payload,
                                    include_library_views=full, attachments_dir=att_dir)
@@ -828,7 +840,11 @@ def alerts_stats(directory):
               help="Seconds one mail may take before its scan is killed.")
 @click.option("--skip", multiple=True, help="Analyzer name to turn off (same as scan).")
 @click.option("--once", is_flag=True, help="One pass over the folder, then exit (cron-friendly).")
-def watch_cmd(drop, alerts_dir, interval, timeout, skip, once):
+@click.option("--min-age", "min_age", type=float, default=0.0, show_default=True,
+              help="Skip files modified within the last N seconds (leave them for the next "
+                   "pass; protects against half-written transfers). 0 = off (producers "
+                   "that rename atomically can keep it off).")
+def watch_cmd(drop, alerts_dir, interval, timeout, skip, once, min_age):
     """Watch a mail drop folder: every mail file that appears is scanned by a
     fresh `arer scan` subprocess (killed if it hangs), then archived to
     handled/ or failed/ inside DROP - never overwritten, never deleted.
@@ -839,19 +855,83 @@ def watch_cmd(drop, alerts_dir, interval, timeout, skip, once):
         for o in outcomes:
             line = f"{o.path.name}  {safe_text(o.detail, 120)}  -> {o.dest.relative_to(drop)}"
             click.echo(click.style(line, fg="red") if o.failed else line)
-    if once:
-        outcomes = poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip)
-        show(outcomes)
-        if any(o.failed for o in outcomes):
-            sys.exit(1)
-        return
-    click.echo(f"watching {drop} every {interval:g}s (Ctrl-C to stop)")
+    lock = _acquire_watch_lock(drop)
+    if lock is None:
+        click.echo(click.style(f"another watcher is already running on {drop}", fg="red"), err=True)
+        sys.exit(1)
+    def _graceful(signum, frame):                       # SIGTERM: stop after the current pass
+        raise KeyboardInterrupt
+    import signal as _signal
+    if not once:
+        try:
+            _signal.signal(_signal.SIGTERM, _graceful)
+        except (ValueError, OSError):                   # not the main thread / unsupported
+            pass
     try:
-        while True:
-            show(poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip))
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        click.echo("\nstopped.")
+        if once:
+            outcomes = poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip,
+                                 min_age_s=min_age)
+            show(outcomes)
+            if any(o.failed for o in outcomes):
+                sys.exit(1)
+            return
+        click.echo(f"watching {drop} every {interval:g}s (Ctrl-C to stop)")
+        try:
+            while True:
+                show(poll_once(drop, alerts_dir=alerts_dir, timeout=timeout, skip=skip,
+                               min_age_s=min_age))
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            click.echo("\nstopped.")
+    finally:
+        _release_watch_lock(lock)
+
+
+def _watch_lock_path(drop: Path) -> Path:
+    return drop / ".arer-watch.lock"
+
+
+def _acquire_watch_lock(drop: Path):
+    """Single-instance lock (R6.4): an O_EXCL lock file holding our pid. A
+    STALE lock (the holder died) is taken over. Returns the lock path or
+    None when another watcher is alive."""
+    import signal as _sig
+    lock = _watch_lock_path(drop)
+    for _attempt in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return lock
+        except FileExistsError:
+            try:
+                pid = int(lock.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                pid = 0
+            alive = False
+            if pid > 0:
+                try:
+                    os.kill(pid, 0)                     # a running holder (including this
+                    alive = True                        # process) keeps its lock
+                except ProcessLookupError:
+                    alive = False
+                except PermissionError:
+                    alive = True
+            if alive:
+                return None
+            try:
+                lock.unlink()                           # stale lock: take over
+            except OSError:
+                return None
+    return None
+
+
+def _release_watch_lock(lock) -> None:
+    try:
+        if lock is not None:
+            lock.unlink()
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #
