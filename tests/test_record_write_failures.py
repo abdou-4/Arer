@@ -85,6 +85,12 @@ def test_disk_full_alert_write_does_not_abort_the_batch(mails, tmp_path, monkeyp
     assert all(x["ok"] for x in lines), "the scans themselves succeeded"
     assert all(x["exit_code"] >= 3 for x in lines), \
         "both mails are alert-level verdicts: their codes must NOT win the batch"
+    # additive record-write keys on every line whose alert record was lost
+    for rec in lines:
+        assert rec["schema"] == "arer.scan-jsonl.v1", "additive keys keep the marker at v1"
+        assert rec["record_written"] is False, rec
+        assert "No space left on device" in rec["record_error"], rec
+        assert rec["report"]["level"], "the verdict report is still published"
 
 
 def test_collision_alert_write_yields_record_error_exit(mails, tmp_path, monkeypatch):

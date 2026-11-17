@@ -276,3 +276,38 @@ def test_list_names_a_corrupt_sidecar(alert_dir):
     res = CliRunner().invoke(main, ["alerts", "list", str(alert_dir)])
     assert res.exit_code == 1
     assert disposition_path(rec.path).name in res.output
+
+
+# --------------------------- atomic writes ---------------------------------- #
+
+
+def test_write_disposition_is_atomic(tmp_path, monkeypatch):
+    """Same atomic pattern as write_alert (R1.1): temp file in the SAME
+    directory, flush, os.replace, temp cleaned up in a finally. A failure
+    mid-write must leave the analyst's existing sidecar untouched and leave
+    NO temp file behind - a lost disposition is a lost decision."""
+    from arer.disposition import build_disposition, write_disposition
+
+    alert_path = tmp_path / "x.alert.json"
+    d1 = build_disposition("a" * 32, "acknowledged", mail_sha256="b" * 64)
+    out = write_disposition(d1, alert_path)
+    assert out == tmp_path / "x.disposition.json"
+    before = out.read_text(encoding="utf-8")
+
+    def no_space(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", no_space)
+    with pytest.raises(OSError):
+        write_disposition(build_disposition("a" * 32, "phishing"), alert_path)
+    monkeypatch.undo()
+
+    assert out.read_text(encoding="utf-8") == before, \
+        "a failed write must never destroy the existing sidecar"
+    assert not [p for p in tmp_path.iterdir() if "tmp" in p.name], \
+        "no temp file may be left behind after the failure"
+
+    # a normal write still succeeds afterwards and leaves no tmp litter either
+    write_disposition(build_disposition("a" * 32, "benign", mail_sha256="b" * 64), alert_path)
+    assert load_disposition(out).status == "benign"
+    assert not [p for p in tmp_path.iterdir() if "tmp" in p.name]

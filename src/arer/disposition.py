@@ -20,6 +20,7 @@ error, unknown extra keys are ignored, errors name the file.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -174,6 +175,18 @@ def read_disposition(alert_path: Path, alert: "Alert | None" = None,
 
 
 def write_disposition(d: Disposition, alert_path: Path) -> Path:
+    """Atomically write the sidecar, the same pattern as write_alert (R1.1):
+    temp file in the SAME directory, flush, close, os.replace - a crash or a
+    full disk mid-write can never destroy the analyst's existing decision,
+    and the temp file is cleaned up in a finally block (no .tmp litter)."""
     p = disposition_path(alert_path)
-    p.write_text(to_json(d), encoding="utf-8")
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(to_json(d))
+            fh.flush()
+        os.replace(tmp, p)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     return p

@@ -257,3 +257,139 @@ def test_worker_serve_survives_a_malformed_line(mails):
     a2 = _json.loads(second)
     assert a2["id"] == 42, f"the next request must be answered normally: {a2}"
     assert a2["errors"] == [] and a2["findings"], a2
+
+
+# --------------------- R1.5: the IPC limits are real -------------------------- #
+
+FAKE_WORKER = """\
+import json, os, sys
+flood = os.environ.get("ARER_FAKE_FLOOD") == "1"
+for raw in sys.stdin.buffer:
+    try:
+        req = json.loads(raw.decode("utf-8"))
+    except Exception:
+        continue
+    if flood:
+        sys.stderr.write("f" * 200001)
+        sys.stderr.flush()
+    out = {"id": req.get("id"), "findings": [], "errors": []}
+    sys.stdout.buffer.write(json.dumps(out).encode("utf-8") + b"\\n")
+    sys.stdout.buffer.flush()
+"""
+
+
+def test_worker_that_floods_stderr_still_answers(mails, tmp_path, monkeypatch):
+    """stderr used to be a PIPE nobody read: a worker writing more than the
+    ~64 KB pipe buffer to stderr blocked its own request until the timeout
+    kill. It is now DEVNULL - a chatty worker still answers and the pool
+    keeps serving the next mail."""
+    import time as _time
+
+    import arer.worker as w
+    fake = tmp_path / "fake_worker.py"
+    fake.write_text(FAKE_WORKER, encoding="utf-8")
+    monkeypatch.setattr(w, "_WORKER_CMD", [sys.executable, str(fake)])
+    monkeypatch.setenv("ARER_FAKE_FLOOD", "1")
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    pool = w.WorkerPool()
+    try:
+        t0 = _time.time()
+        findings, errors = pool.run_analyzers(email, cfg, None)
+        elapsed = _time.time() - t0
+        assert errors == [], f"a stderr flood must not break the request: {errors}"
+        assert findings == []
+        assert elapsed < 10, f"the request stalled {elapsed:.1f}s - stderr blocked the worker"
+        findings2, errors2 = pool.run_analyzers(email, cfg, None)
+        assert errors2 == [], "the pool must keep serving after a stderr flood"
+    finally:
+        pool.kill()
+
+
+def test_oversized_request_fails_fast_without_starting_a_worker(mails, monkeypatch):
+    """A request above _MAX_REQUEST_BYTES is refused BEFORE anything is sent:
+    fast error for THIS mail, no worker started, and the next mail is served
+    normally afterwards."""
+    import arer.worker as w
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    original = w._MAX_REQUEST_BYTES
+    monkeypatch.setattr(w, "_MAX_REQUEST_BYTES", 128)
+    pool = w.WorkerPool()
+    findings, errors = pool.run_analyzers(email, cfg, None)
+    assert findings == []
+    assert any("request too large" in e for e in errors), errors
+    assert pool._proc is None, "a too-large request must never start a worker"
+    monkeypatch.setattr(w, "_MAX_REQUEST_BYTES", original)   # restore for the next mail
+    findings2, errors2 = pool.run_analyzers(email, cfg, None)
+    pool.kill()
+    assert errors2 == [], f"the next mail must be analyzed normally: {errors2}"
+
+
+def test_serve_answers_an_oversized_line_and_keeps_serving(mails, monkeypatch):
+    """A stdin line above _MAX_REQUEST_BYTES used to be skipped SILENTLY
+    (`continue`): the parent waited for an answer that never came, until the
+    timeout kill. The worker now answers the too-large line with an error
+    (id None) and serves the NEXT request."""
+    import io
+    import json as _json
+    import types
+
+    import arer.worker as w
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    request = _json.dumps({"id": 7, "email": email.model_dump(mode="json"),
+                           "config": cfg.model_dump(mode="json"), "skip": []}).encode("utf-8")
+    garbage = b"z" * (len(request) + 100)               # ONE line above the cap
+    # +1 for the trailing newline the reader sees on the request line
+    monkeypatch.setattr(w, "_MAX_REQUEST_BYTES", len(request) + 1)
+    monkeypatch.setattr(sys, "stdin",
+                        types.SimpleNamespace(buffer=io.BytesIO(garbage + b"\n" + request + b"\n")))
+    out = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(buffer=out))
+
+    assert w._serve() == 0
+    a1, a2 = (_json.loads(x) for x in out.getvalue().splitlines())
+    assert a1["id"] is None, f"a too-large line must answer id None: {a1}"
+    assert a1["findings"] == [] and "request too large" in a1["errors"][0], a1
+    assert a2["id"] == 7 and a2["errors"] == [], f"the next request is served normally: {a2}"
+
+
+def test_pump_never_queues_an_oversized_answer(monkeypatch):
+    """The reader thread caps answers: one line above _MAX_WORKER_OUTPUT is
+    replaced by the _ANSWER_TOO_LARGE sentinel BEFORE json.loads ever sees
+    it, and the EOF marker still arrives so the parent never hangs."""
+    import io
+    import json as _json
+    import queue as _queue
+    import types
+
+    import arer.worker as w
+    monkeypatch.setattr(w, "_MAX_WORKER_OUTPUT", 16)
+    big = _json.dumps({"id": 1, "findings": [], "errors": []}).encode("utf-8") + b"\n"
+    assert len(big) > 16
+    q = _queue.Queue()
+    w._pump(types.SimpleNamespace(stdout=io.BytesIO(big)), q)
+    assert q.get(timeout=5) is w._ANSWER_TOO_LARGE, "the huge line must never reach the queue"
+    assert q.get(timeout=5) is None, "the EOF marker must still arrive"
+
+
+def test_oversized_answer_fails_closed_and_the_pool_recovers(mails, tmp_path, monkeypatch):
+    """Parent side of the reader cap: an oversized answer is an analyzer
+    error (fail closed), the worker is killed, and the pool still serves the
+    next mail afterwards."""
+    import arer.worker as w
+    fake = tmp_path / "fake_worker.py"
+    fake.write_text(FAKE_WORKER, encoding="utf-8")
+    monkeypatch.setattr(w, "_WORKER_CMD", [sys.executable, str(fake)])
+    monkeypatch.setattr(w, "_MAX_WORKER_OUTPUT", 16)
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    pool = w.WorkerPool()
+    try:
+        for _ in range(2):
+            findings, errors = pool.run_analyzers(email, cfg, None)
+            assert findings == []
+            assert any("oversized answer" in e for e in errors), errors
+    finally:
+        pool.kill()

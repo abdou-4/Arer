@@ -21,8 +21,12 @@ Design (remediation plan R1.5):
   bounded answer). No pickle, no executable deserialization: the request is
   the Email model's own JSON plus the validated Config's JSON; the answer is
   a JSON list of findings and the list of analyzer errors.
+- The worker's stderr is DISCARDED (DEVNULL): a chatty analyzer can never
+  fill an unread 64 KB pipe and stall its own request until the timeout kill.
 - Worker output is capped; an oversized or malformed answer is an analyzer
-  error, never a silent success.
+  error, never a silent success. Request sizes are capped on BOTH sides: the
+  parent refuses to send a too-large request, and the worker answers a
+  too-large line with an error instead of skipping it silently.
 
 The pipeline keeps an in-process thread path for INJECTED analyzers (tests
 and direct API users); production scans always go through the worker.
@@ -55,6 +59,13 @@ from .models import Email, Finding
 _MAX_WORKER_OUTPUT = 16 * 1024 * 1024
 _MAX_REQUEST_BYTES = 64 * 1024 * 1024
 _WORKER_SLACK_S = 5.0        # on top of the analyzer budget: covers IPC + kill + wait
+
+_WORKER_CMD = (sys.executable, "-m", "arer.worker", "--serve")
+
+# Sentinel queued by _pump when ONE answer line exceeds _MAX_WORKER_OUTPUT:
+# the huge line is never queued (it would sit in memory whole), the parent
+# fails the request closed instead.
+_ANSWER_TOO_LARGE = object()
 
 
 def analyze_with_threads(email: Email, cfg: Config, analyzers: list[Analyzer]
@@ -115,21 +126,23 @@ def _serve() -> int:
     A crash kills only this process - the parent fails that mail closed and
     starts a fresh worker for the next one."""
     for raw in sys.stdin.buffer:
-        if len(raw) > _MAX_REQUEST_BYTES:
-            continue
         req = None                                       # reset per iteration: a malformed
-        try:                                             # line must answer id None, not echo
-            req = json.loads(raw.decode("utf-8"))        # the PREVIOUS request's id, and the
-            email = Email.model_validate(req["email"])   # UnboundLocalError that killed the
-            cfg = Config.model_validate(req["config"])   # worker here is exactly the bug.
-            analyzers = get_analyzers(set(req.get("skip") or ()))
-            findings, errors = analyze_with_threads(email, cfg, analyzers)
-            out = {"id": req.get("id"), "findings": [f.model_dump(mode="json") for f in findings],
-                   "errors": errors}
-        except Exception as e:                           # noqa: BLE001 - answer, then take the next mail
-            out = {"id": req.get("id") if isinstance(req, dict) else None,
-                   "findings": [],
-                   "errors": [f"worker request failed: {type(e).__name__}: {str(e)[:200]}"]}
+        if len(raw) > _MAX_REQUEST_BYTES:                # line must answer id None, not echo
+            out = {"id": None, "findings": [],           # the PREVIOUS request's id, and the
+                   "errors": ["worker request too large, not analyzed"]}
+        else:
+            try:                                         # UnboundLocalError that killed the
+                req = json.loads(raw.decode("utf-8"))    # worker here is exactly the bug.
+                email = Email.model_validate(req["email"])
+                cfg = Config.model_validate(req["config"])
+                analyzers = get_analyzers(set(req.get("skip") or ()))
+                findings, errors = analyze_with_threads(email, cfg, analyzers)
+                out = {"id": req.get("id"), "findings": [f.model_dump(mode="json") for f in findings],
+                       "errors": errors}
+            except Exception as e:                       # noqa: BLE001 - answer, then take the next mail
+                out = {"id": req.get("id") if isinstance(req, dict) else None,
+                       "findings": [],
+                       "errors": [f"worker request failed: {type(e).__name__}: {str(e)[:200]}"]}
         try:
             sys.stdout.buffer.write(json.dumps(out).encode("utf-8") + b"\n")
             sys.stdout.buffer.flush()
@@ -141,6 +154,19 @@ def _serve() -> int:
         if any("timed out" in e for e in out["errors"]):
             os._exit(4)
     return 0
+
+
+def _pump(proc, q) -> None:
+    """Reader thread: move the worker's answer lines onto the queue until EOF.
+    Size is checked BEFORE anything else touches the line - one answer bigger
+    than _MAX_WORKER_OUTPUT is replaced by the _ANSWER_TOO_LARGE sentinel, so
+    an oversized answer never sits in memory whole or reaches json.loads."""
+    try:
+        for line in proc.stdout:
+            q.put(_ANSWER_TOO_LARGE if len(line) > _MAX_WORKER_OUTPUT else line)
+    except Exception:                                 # noqa: BLE001 - reader dies with the pipe
+        pass
+    q.put(None)                                       # EOF marker
 
 
 def worker_main() -> int:
@@ -177,21 +203,15 @@ class WorkerPool:
             popen_kwargs["start_new_session"] = True      # own group: killable as a tree
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-m", "arer.worker", "--serve"],
+                list(_WORKER_CMD),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, **popen_kwargs)
+                stderr=subprocess.DEVNULL, **popen_kwargs)
+            # stderr is deliberately DEVNULL: a PIPE nobody reads blocks a
+            # chatty worker after ~64 KB until the timeout kill.
         except OSError as e:
             raise _WorkerDied(f"analyzer worker: could not start ({e})") from e
         q: _queue.Queue = _queue.Queue()
         self._lines = q
-
-        def _pump(proc, q):
-            try:
-                for line in proc.stdout:
-                    q.put(line)
-            except Exception:                             # noqa: BLE001 - reader dies with the pipe
-                pass
-            q.put(None)                                   # EOF marker
 
         self._reader = threading.Thread(target=_pump, args=(self._proc, q), daemon=True)
         self._reader.start()
@@ -233,6 +253,10 @@ class WorkerPool:
                 "config": cfg.model_dump(mode="json"),
                 "skip": sorted(skip or ()),
             }).encode("utf-8")
+            if len(request) > _MAX_REQUEST_BYTES:
+                # fail FAST, before any worker is started or killed: a request
+                # the worker must refuse anyway is an error for THIS mail only
+                return [], ["analyzer worker: request too large, not analyzed"]
             timeout = float(cfg.limits.analyzer_timeout_s) + _WORKER_SLACK_S
             if self._proc is None:
                 try:
@@ -261,6 +285,8 @@ class WorkerPool:
                         raise TimeoutError from e
                     if line is None:                      # EOF: worker crashed mid-request
                         raise _WorkerDied("analyzer worker: died mid-request (crash or OOM)")
+                    if line is _ANSWER_TOO_LARGE:         # capped by the reader thread
+                        raise _WorkerDied("analyzer worker: oversized answer, treated as an error")
                     try:
                         answer = json.loads(line.decode("utf-8"))
                     except Exception as e:                # noqa: BLE001 - malformed line fails closed

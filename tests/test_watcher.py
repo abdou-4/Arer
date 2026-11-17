@@ -27,7 +27,7 @@ import pytest
 from click.testing import CliRunner
 
 from arer.watcher import (FAILED_DIR, HANDLED_DIR, archive, mail_candidates,
-                          poll_once, scan_command)
+                          poll_once, scan_command, scan_one)
 
 
 def fake_runner(returncode=0, stdout="", stderr=""):
@@ -112,6 +112,18 @@ def test_a_hang_is_killed_and_archived_as_failed(tmp_path):
     drop = drop_with(tmp_path, "p.eml")
     (o,) = poll_once(drop, timeout=30.0, runner=timeout_runner())
     assert o.failed and "timed out" in o.detail and o.dest == drop / FAILED_DIR / "p.eml"
+
+
+def test_record_error_exit_8_lands_in_failed(tmp_path):
+    """Code 8 (RECORD_ERROR - the alert record could not be written) is NOT
+    in VERDICT_EXITS: the mail must land in failed/ with Outcome.failed True,
+    never be archived as a handled scan result."""
+    drop = drop_with(tmp_path, "p.eml")
+    o = scan_one(drop / "p.eml", argv=["scan", str(drop / "p.eml")],
+                 runner=fake_runner(8, stdout="SUSPICIOUS          20  p.eml"))
+    assert o.failed and o.dest == drop / FAILED_DIR / "p.eml"
+    assert o.dest.is_file() and not (drop / "p.eml").exists()
+    assert "not a valid verdict code" in o.detail or "exit 8" in o.detail
 
 
 def test_one_failure_never_stops_the_pass(tmp_path):

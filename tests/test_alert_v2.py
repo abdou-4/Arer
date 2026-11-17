@@ -222,6 +222,9 @@ def test_jsonl_output_one_record_per_message(tmp_path):
     for rec in recs:
         assert rec["ok"] is True and rec["exit_code"] in (0, 3, 4, 5, 6, 7)
         assert rec["report"]["level"] and "score" in rec["report"]
+        # record_written/record_error are ADDITIVE keys: they appear only on
+        # lines whose alert-record write failed (docs/scan-jsonl.md)
+        assert "record_written" not in rec and "record_error" not in rec
 
 
 def test_jsonl_output_structured_error_lines(tmp_path):

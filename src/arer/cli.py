@@ -214,7 +214,9 @@ def _save(cfg, email, verdict, name) -> int:
                    "sender DOMAIN by default - R4.5 privacy default).")
 @click.option("--jsonl", "jsonl_path", type=click.Path(dir_okay=False, path_type=Path),
               help="Write one versioned JSON record per scanned message to this file "
-                   "(load failures become structured error lines).")
+                   "(load failures become structured error lines; a failed alert-record "
+                   "write adds the additive keys record_written/record_error - the "
+                   "schema marker stays arer.scan-jsonl.v1).")
 @click.option("--skip", multiple=True, help="Analyzer name to skip (repeatable).")
 @click.option("--save/--no-save", default=None,
               help="Remember this scan in your history (default: config/history.yaml auto_save, normally off).")
@@ -245,9 +247,16 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
         alerts_dir.mkdir(parents=True, exist_ok=True)
     jsonl_fh = jsonl_path.open("w", encoding="utf-8") if jsonl_path else None
 
-    def _jsonl_line(source: Path, *, ok: bool, v=None, error: str = "") -> None:
+    def _jsonl_line(source: Path, *, ok: bool, v=None, error: str = "",
+                    record_error: str | None = None) -> None:
         """One versioned record per message (R3.3); operational failures are
-        structured error lines, never silent."""
+        structured error lines, never silent.
+
+        Line shape (arer.scan-jsonl.v1): schema, source_file, ok; ok lines add
+        exit_code + report, load failures add error. When the ALERT-RECORD
+        write failed for a successfully scanned mail, the line also carries
+        record_written=false and record_error="..." - ADDITIVE keys, so the
+        schema marker stays v1 and old readers keep working."""
         if jsonl_fh is None:
             return
         line = {"schema": "arer.scan-jsonl.v1", "source_file": source.name, "ok": ok}
@@ -256,6 +265,9 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
             line["report"] = json.loads(to_json(v, defang=not raw))
         else:
             line["error"] = error
+        if record_error is not None:
+            line["record_written"] = False
+            line["record_error"] = record_error
         jsonl_fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         jsonl_fh.flush()
 
@@ -293,6 +305,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
             json_path.write_text(report, encoding="utf-8")
         if out_dir:
             (out_dir / f"{p.name}.report.json").write_text(report, encoding="utf-8")
+        record_error = None
         if alerts_dir and (is_alert_level(v.level) or is_analysis_incomplete(v)):
             # R1.4: an analysis that failed part-way also lands in the queue, so
             # evasive or damaged mail is never silently dropped. The record
@@ -308,11 +321,12 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
                 # verdicts of the remaining mails, OR hide behind a verdict
                 # exit code: it is tracked separately and surfaces as exit 8
                 # (RECORD_ERROR, src/arer/exitcodes.py) after the loop.
+                record_error = safe_text(e, 200)
                 click.echo(click.style(f"✗ {safe_text(p.name)}: alert record not written "
-                                       f"({safe_text(e, 200)})", fg="red"), err=True)
+                                       f"({record_error})", fg="red"), err=True)
                 failed = True
                 write_failed = True
-        _jsonl_line(p, ok=True, v=v)
+        _jsonl_line(p, ok=True, v=v, record_error=record_error)
         codes.append(code)
 
     if jsonl_fh is not None:
