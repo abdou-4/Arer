@@ -3,7 +3,7 @@
   "alert_id": "ffffffffffffffffffffffffffffffff",
   "generated_utc": "2026-11-17T09:30:00Z",
   "source_file": "alert[.]eml",
-  "logic_hash": "36a05c87d3f2ebe3",
+  "logic_hash": "54a2fd068683fd54",
   "scan": {
     "from": "",
     "message_id": "<20261101.1[@]x[.]com>",

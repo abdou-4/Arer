@@ -41,7 +41,7 @@ from .metrics import queue_stats, render_queue_stats
 from .history.indicators import extract_indicators
 from .history.store import (HistoryStore, MigrationRequired, STATUS_TO_DISPOSITION, logic_hash,
                             migrate as migrate_history, read_schema_version)
-from .loader import EMAIL_SUFFIXES, SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
+from .loader import SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
 from .models import Level
 from .pipeline import run_pipeline
 from .report import render_terminal, to_json
@@ -224,7 +224,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     paths: list[Path] = []
     for target in input:
@@ -810,7 +810,7 @@ def alerts_confirm_campaign(directory, campaign_id, reject, note, config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     store = HistoryStore.open(cfg.history.db_path, create=True)
     if store is None:
         raise click.ClickException(f"no history database at {cfg.history.db_path}")
@@ -997,7 +997,7 @@ def eval_cmd(root, from_history, with_history_signals, only, skip_dirs, details,
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     if from_history:
         ev = evaluate_history(cfg, only=only, include_history=with_history_signals)
     else:
@@ -1007,7 +1007,7 @@ def eval_cmd(root, from_history, with_history_signals, only, skip_dirs, details,
         try:
             ev = evaluate(root, cfg, only=only, skip=set(skip), skip_dirs=set(skip_dirs), include_history=with_history_signals)
         except ValueError as e:
-            raise click.ClickException(safe_text(e, 240))
+            raise click.ClickException(safe_text(e, 240)) from e
     if not ev.results:
         msg = "; ".join(ev.errors) or f"no labeled samples found under {root} (need phish/ and legit/ folders)"
         click.echo(click.style(msg, fg="red"), err=True)
@@ -1033,7 +1033,7 @@ def label_cmd(target, label, note, config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     store = HistoryStore.open(cfg.history.db_path, create=True)
     try:
         p = Path(target)
@@ -1072,7 +1072,7 @@ def _open_history(config_dir, create=False):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     store = HistoryStore.open(cfg.history.db_path, create=create)
     if store is None and not create:
         raise click.ClickException(f"no history yet at {cfg.history.db_path}. Start with: arer scan FILE --save   or   arer label FILE phish")
@@ -1131,7 +1131,7 @@ def history_migrate(dry_run, no_backup, config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     db = cfg.history.db_path
     version = read_schema_version(db)
     if not db.is_file():
@@ -1166,7 +1166,7 @@ def history_import_dispositions(queue, config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     store = HistoryStore.open(cfg.history.db_path, create=False)
     if store is None:
         raise click.ClickException(f"no history database at {cfg.history.db_path} (create one with a labeled scan)")
@@ -1272,7 +1272,7 @@ def feeds_update(names, config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     if not cfg.feeds.sources:
         raise click.ClickException("no feeds configured (config/feeds.yaml is missing or empty)")
     results = update_all(cfg, list(names) or None)
@@ -1303,7 +1303,7 @@ def feeds_status(config_dir):
     try:
         cfg = load_config(config_dir)
     except ConfigError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     store = IntelStore.open(cfg.feeds.data_dir)
     have = {s.name: s for s in store.sources()} if store else {}
     db = cfg.feeds.data_dir / DB_NAME

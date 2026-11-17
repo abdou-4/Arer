@@ -117,7 +117,6 @@ def lookalike(host: str, brands, legit_domains, suspicious_tlds) -> Lookalike | 
         return None
 
     tokens = [t for t in label.split("-") if t]
-    nlabel = normalize_confusables(label)
     best: Lookalike | None = None
 
     def consider(brand, kind, conf):

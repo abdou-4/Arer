@@ -212,6 +212,13 @@ class WorkerPool:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
+        # R8: close the pipes so no handle lingers for the GC to complain about
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                if stream is not None:
+                    stream.close()
+            except OSError:
+                pass
 
     # ---- one mail --------------------------------------------------------- #
     def run_analyzers(self, email: Email, cfg: Config, skip: set[str] | None
@@ -249,8 +256,8 @@ class WorkerPool:
                 while True:
                     try:
                         line = self._lines.get(timeout=timeout)
-                    except _queue.Empty:
-                        raise TimeoutError
+                    except _queue.Empty as e:
+                        raise TimeoutError from e
                     if line is None:                      # EOF: worker crashed mid-request
                         raise _WorkerDied("analyzer worker: died mid-request (crash or OOM)")
                     try:

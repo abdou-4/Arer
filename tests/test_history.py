@@ -96,7 +96,7 @@ def test_database_is_private_and_versioned(cfg):
 def test_no_bodies_subjects_or_recipients_are_stored(cfg):
     e = mk(text="SECRET-BODY-TEXT click https://phish.example.net/x", subject="SECRET-SUBJECT")
     save(cfg, e, analyzers=None)
-    raw = open(cfg.history.db_path, "rb").read()
+    raw = cfg.history.db_path.read_bytes()   # closes the handle (R8: no ResourceWarning)
     assert b"SECRET-BODY-TEXT" not in raw and b"SECRET-SUBJECT" not in raw
 
 

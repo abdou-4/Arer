@@ -32,7 +32,7 @@ def render_terminal(v: Verdict, cfg=None) -> str:
     L.append(click.style("═" * 64, dim=True))
     L.append(f"Subject : {clean(v.subject, 100)}")
     L.append(f"SHA-256 : {v.sha256[:16]}…")
-    L.append(f"Verdict : " + click.style(f" {v.level.value} ", fg=color, bold=True, reverse=True)
+    L.append("Verdict : " + click.style(f" {v.level.value} ", fg=color, bold=True, reverse=True)
              + f"  {v.score}/100")
     L.append(click.style(_bar(v.score), fg=color))
     if v.overridden_by:

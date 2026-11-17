@@ -21,7 +21,7 @@ PHONE = re.compile(r"(?<![\w.])(?:(?:\+?\d{1,3}[\s.\-])?(?:\(\d{3}\)\s?|\d{3}[\s
 DOT_SUBJECT = re.compile(r"^(?:[A-Za-z0-9]{1,12}\.){4,}[A-Za-z0-9]{1,12}$")
 FILLER = {"now", "get", "up", "to", "your", "you", "the", "free", "win", "won", "claim", "click", "here", "for", "and",
           "is", "are", "of", "in", "on", "a", "new", "urgent", "open", "view", "see", "call", "buy", "only", "today",
-          "off", "from", "with", "this", "that", "just", "are", "be", "it", "my", "me", "we"}
+          "off", "from", "with", "this", "that", "just", "be", "it", "my", "me", "we"}
 AMOUNT = re.compile(r"[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:usd|eur|gbp|dollars|euros)\b", re.I)
 
 
