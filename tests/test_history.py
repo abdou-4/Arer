@@ -150,6 +150,33 @@ def test_cli_refuses_a_foreign_schema_database(cfg, tmp_path):
     assert "'3'" in r.output and "'1', '2'" in r.output, r.output
     assert "no history yet" not in r.output and "Traceback" not in r.output
 
+
+def test_scan_save_refusal_never_claims_a_save(cfg, tmp_path):
+    """`arer scan --save` against a schema-3 database: the red 'not saved'
+    note is the whole message - non-quiet mode must NOT also print
+    'history: saved (first time)' (the old code set times = 1 after catching
+    UnsupportedSchema and fell straight into the success branch), and the
+    verdict exit code stands unchanged."""
+    import shutil
+    import sqlite3
+
+    save(cfg, mk())
+    c = sqlite3.connect(cfg.history.db_path); c.execute("UPDATE meta SET value='3'"); c.commit(); c.close()
+    mail = tmp_path / "clean.eml"
+    mail.write_text("From: Sam <sam@example.org>\r\nTo: me@example.org\r\nSubject: Lunch\r\n"
+                    "Date: Mon, 05 Jan 2026 09:00:00 +0000\r\nMessage-ID: <1@example.org>\r\n"
+                    "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+                    "Hi, lunch on Friday?", encoding="utf-8")
+    cfg_dir = tmp_path / "cfg"
+    shutil.copytree("config", cfg_dir)
+    (cfg_dir / "history.yaml").write_text(f"db_path: {cfg.history.db_path}\n", encoding="utf-8")
+    r = CliRunner().invoke(main, ["scan", str(mail), "--save", "--skip", "intel", "--skip", "history",
+                                  "--config", str(cfg_dir)])
+    out = r.output + r.stderr
+    assert r.exit_code == 0, f"the verdict exit code must stand: {out}"
+    assert "history: not saved" in out and "schema '3'" in out, out
+    assert "history: saved" not in out, f"nothing was written - no saved line: {out}"
+
 def test_no_bodies_subjects_or_recipients_are_stored(cfg):
     e = mk(text="SECRET-BODY-TEXT click https://phish.example.net/x", subject="SECRET-SUBJECT")
     save(cfg, e, analyzers=None)

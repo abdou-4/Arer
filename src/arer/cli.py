@@ -304,15 +304,19 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
             click.echo(render_terminal(v, cfg))
 
         if save if save is not None else cfg.history.auto_save:
+            saved, times = True, 0
             try:
                 times = _save(cfg, email, v, p.name)
             except UnsupportedSchema as e:
                 # a verdict exit code must stand (the exit-code contract is
                 # frozen), so a refused history write is a loud stderr note,
-                # not a ClickException that would abort the whole batch
+                # not a ClickException that would abort the whole batch;
+                # nothing was written, so the 'saved' line below must never print
+                saved = False
                 click.echo(click.style(f"history: not saved - {safe_text(e, 200)}", fg="red"), err=True)
-                times = 1
-            if times == 0:
+            if not saved:
+                pass                                  # the red note above is the whole message
+            elif times == 0:
                 click.echo(click.style("history: not saved - this scan has no verified SHA-256 "
                                        "(parser-JSON input). Rescan the original .eml/.msg to store it.", fg="yellow"))
             elif not quiet:
