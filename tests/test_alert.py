@@ -44,6 +44,11 @@ def mk(frm="news@discord.com", subject="Your account is locked", text="", html="
 
 AUTH_FAIL = "mx.corp.test; spf=fail smtp.mailfrom=x.com; dkim=none; dmarc=fail header.from=x.com"
 
+# Version pins for the golden: whatever mail-parser / arer are installed,
+# the golden record must compare equal byte-for-byte.
+HERMETIC_ENGINE_VERSION = "hermetic-engine-0"
+HERMETIC_PARSER_VERSION = "hermetic-parser-0"
+
 
 def hermetic_verdict(email):
     """Verdict without intel/history analyzers: local feeds and history.db are
@@ -52,10 +57,16 @@ def hermetic_verdict(email):
 
 
 def fixed_alert(email, name="alert.eml"):
-    """Alert with a frozen clock and id, so the golden is byte-stable."""
-    return build_alert(hermetic_verdict(email), email, name, cfg,
-                       alert_id="f" * 32,
-                       now=datetime(2026, 11, 17, 9, 30, 0, tzinfo=timezone.utc))
+    """Alert with a frozen clock, id AND versions, so the golden is
+    byte-stable on ANY machine: parser_version used to come from the
+    installed mail-parser package, so the golden test passed on one machine
+    (mail-parser 4.8.0) and failed on another (4.11.0)."""
+    a = build_alert(hermetic_verdict(email), email, name, cfg,
+                    alert_id="f" * 32,
+                    now=datetime(2026, 11, 17, 9, 30, 0, tzinfo=timezone.utc))
+    a.engine_version = HERMETIC_ENGINE_VERSION        # pin: the golden must not
+    a.parser_version = HERMETIC_PARSER_VERSION        # depend on installed versions
+    return a
 
 
 def test_schema_marker_and_key_sets_are_frozen():
@@ -86,6 +97,22 @@ def test_golden_alert_record():
         GOLDEN.write_text(actual, encoding="utf-8")
         pytest.skip("golden regenerated - commit it and review the diff")
     assert actual == GOLDEN.read_text(encoding="utf-8")
+
+
+def test_golden_is_hermetic_across_installed_versions(monkeypatch):
+    """The golden used to embed the installed mail-parser/arer versions: it
+    passed on one machine (mail-parser 4.8.0) and failed on another (4.11.0).
+    Fake BOTH version sources to values from a DIFFERENT machine - the golden
+    must still match byte-for-byte."""
+    import importlib.metadata as im
+
+    def foreign_version(dist):
+        return "4.11.0" if dist == "mail-parser" else "9.9.9-foreign"
+
+    monkeypatch.setattr(im, "version", foreign_version)
+    actual = to_json(fixed_alert(mk(auth=AUTH_FAIL)))
+    assert actual == GOLDEN.read_text(encoding="utf-8"), \
+        "the golden depends on installed package versions"
 
 
 def test_v1_records_still_read_back():

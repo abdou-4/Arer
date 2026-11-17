@@ -128,3 +128,20 @@ as `legacy_unverified`. The export gate (`is_analyst_confirmed_phishing`)
 accepts ONLY analyst-provenance `phishing` decisions, so an old queue's
 records are never exported as confirmed indicators until an analyst
 re-decides them with `alerts set`.
+
+## Trust model
+
+The sidecar is a plain JSON file, unsigned. The `provenance: analyst` marker
+is an **integrity marker, not authentication**: anyone with write access to
+the queue folder can forge a sidecar with analyst provenance, a plausible
+analyst id and timestamp. Protect the queue directory with filesystem
+permissions — it is the trust boundary. In particular, the tool does NOT
+consult `history.db` when gating `alerts export`: the export gate reads only
+the files in the queue folder, so the decision events mirrored into
+`history.db` never strengthen (or weaken) what the queue exports.
+
+Related gap: `arer label` and `arer history import` write `scans.label`
+DIRECTLY in the database, with no decision event and no provenance record at
+all. Those labels are training-eligible by construction; run them only as the
+analyst who owns the database. (Use `alerts set` when the decision must carry
+a provenance trail.)

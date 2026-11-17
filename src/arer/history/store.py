@@ -55,6 +55,14 @@ class MigrationRequired(RuntimeError):
     """The decision/provenance API needs schema 2; run `arer history migrate`."""
 
 
+class UnsupportedSchema(RuntimeError):
+    """The database's meta schema is not one this arer knows (KNOWN_SCHEMAS).
+    It is NEVER opened, read or write: reading it would misread every row
+    (a newer arer may have changed the layout) and create=True used to
+    proceed with v1 SQL on top of foreign tables. The message names the
+    found version and the versions this arer supports."""
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -112,6 +120,14 @@ CREATE INDEX IF NOT EXISTS idx_decisions_case ON case_decisions(case_sha256, id)
 """
 
 
+def _unsupported_schema_error(path, version: str) -> UnsupportedSchema:
+    known = ", ".join(f"'{v}'" for v in KNOWN_SCHEMAS)
+    return UnsupportedSchema(
+        f"history database {path} has schema '{version}', but this arer supports "
+        f"schemas {known} - refusing to open it "
+        "(made by a newer or foreign arer? convert it or restore a backup first)")
+
+
 def _row(r) -> Row:
     return Row(*r[:8], bool(r[8]), *r[9:])
 
@@ -151,6 +167,9 @@ class HistoryStore:
                 CREATE INDEX IF NOT EXISTS ind_lookup ON indicators(kind, value);
             """)
             existing = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+            if existing is not None and existing[0] not in KNOWN_SCHEMAS:
+                conn.close()
+                raise _unsupported_schema_error(path, existing[0])
             if existing is None:
                 # brand-new database: straight to schema 2 (v1 tables + provenance tables)
                 conn.executescript(_V2_DDL)
@@ -172,7 +191,10 @@ class HistoryStore:
             uri = f"file:{quote(str(path))}?mode={'ro' if readonly else 'rw'}"
             conn = sqlite3.connect(uri, uri=True)
             row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-            if not row or row[0] not in KNOWN_SCHEMAS:
+            if row and row[0] not in KNOWN_SCHEMAS:
+                conn.close()
+                raise _unsupported_schema_error(path, row[0])
+            if not row:
                 conn.close()
                 return None
             store = cls(conn)

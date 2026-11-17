@@ -109,3 +109,16 @@ Reading rules, frozen by `tests/test_alert_store.py`:
   golden file; producers may emit both during a transition.
 - A finding id appearing in `verdict.findings` is additionally frozen by
   `tests/test_frozen_findings.py` / `docs/finding-ids.md`.
+
+## Trust model
+
+A record is a plain JSON file, unsigned. `logic_hash`, `config_hash`,
+`engine_version` and `parser_version` identify what PRODUCED the record; they
+do not make the file authentic — anyone with write access to the queue folder
+can edit a record or mint a new one. The disposition sidecar beside it is the
+same plain JSON: its analyst `provenance` is an integrity marker, not
+authentication (see `docs/dispositions.md`). Protect the queue directory with
+filesystem permissions — it is the trust boundary. Note also that `alerts
+export` gates ONLY on the files in the queue folder (the sidecar's
+provenance), never on `history.db`, and that `arer label` / `arer history
+import` write `scans.label` directly with no provenance event.

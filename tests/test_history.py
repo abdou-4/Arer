@@ -12,7 +12,7 @@ from arer.cli import main
 from arer.config import load_config
 from arer.evaluate import evaluate, evaluate_history, render
 from arer.history.indicators import addr_hash, extract_indicators
-from arer.history.store import HistoryStore, logic_hash, rescore
+from arer.history.store import HistoryStore, UnsupportedSchema, logic_hash, rescore
 from arer.models import Email
 from arer.pipeline import run_pipeline
 
@@ -91,7 +91,64 @@ def test_database_is_private_and_versioned(cfg):
     assert HistoryStore.open(cfg.history.db_path / "nope") is None
     import sqlite3
     c = sqlite3.connect(cfg.history.db_path); c.execute("UPDATE meta SET value='99'"); c.commit(); c.close()
-    assert HistoryStore.open(cfg.history.db_path) is None                      # unknown schema: refuse, don't guess
+    with pytest.raises(UnsupportedSchema):                     # unknown schema: refuse, don't guess
+        HistoryStore.open(cfg.history.db_path)
+
+
+def test_unknown_schema_raises_in_both_open_modes(cfg):
+    """A database whose meta schema is not one this arer knows must never be
+    opened: read-only used to return None (it looked like 'no history') and
+    create=True PROCEEDED, writing v1 rows into foreign tables. Both modes
+    now raise UnsupportedSchema naming the found version and the versions
+    this arer supports."""
+    save(cfg, mk())                                            # a healthy schema-2 database
+    import sqlite3
+    c = sqlite3.connect(cfg.history.db_path); c.execute("UPDATE meta SET value='3'"); c.commit(); c.close()
+    with pytest.raises(UnsupportedSchema) as ro:
+        HistoryStore.open(cfg.history.db_path)                 # read mode
+    with pytest.raises(UnsupportedSchema) as cr:
+        HistoryStore.open(cfg.history.db_path, create=True)    # create mode
+    for got in (ro, cr):
+        assert "'3'" in str(got.value), str(got.value)         # names the found version
+        assert "'1'" in str(got.value) and "'2'" in str(got.value), str(got.value)  # and the supported ones
+
+
+def test_missing_file_returns_none_and_known_schemas_unchanged(cfg):
+    """Only UNKNOWN schemas raise: a missing file is still 'no history', and
+    schema 1 and 2 databases open exactly as before."""
+    import sqlite3
+
+    assert HistoryStore.open(cfg.history.db_path / "nope") is None
+    save(cfg, mk())
+    s = HistoryStore.open(cfg.history.db_path)
+    assert s.schema_version == "2"                             # schema 2 as before
+    s.close()
+    conn = sqlite3.connect(cfg.history.db_path)
+    conn.execute("UPDATE meta SET value='1' WHERE key='schema'")
+    conn.commit(); conn.close()
+    s1 = HistoryStore.open(cfg.history.db_path)
+    assert s1.schema_version == "1"                            # schema 1 as before
+    assert s1.get(mk().file.sha256) is None                    # and its rows are readable
+    s1.close()
+
+
+def test_cli_refuses_a_foreign_schema_database(cfg, tmp_path):
+    """CLI commands turn UnsupportedSchema into a ClickException (exit 1,
+    message names the versions) instead of a traceback - and never into the
+    'no history yet' hint, which would invite creating a second database
+    next to the one that could not be opened."""
+    import shutil
+    import sqlite3
+
+    save(cfg, mk())
+    c = sqlite3.connect(cfg.history.db_path); c.execute("UPDATE meta SET value='3'"); c.commit(); c.close()
+    cfg_dir = tmp_path / "cfg"
+    shutil.copytree("config", cfg_dir)
+    (cfg_dir / "history.yaml").write_text(f"db_path: {cfg.history.db_path}\n", encoding="utf-8")
+    r = CliRunner().invoke(main, ["history", "list", "--config", str(cfg_dir)])
+    assert r.exit_code == 1, r.output
+    assert "'3'" in r.output and "'1', '2'" in r.output, r.output
+    assert "no history yet" not in r.output and "Traceback" not in r.output
 
 def test_no_bodies_subjects_or_recipients_are_stored(cfg):
     e = mk(text="SECRET-BODY-TEXT click https://phish.example.net/x", subject="SECRET-SUBJECT")

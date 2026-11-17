@@ -41,7 +41,8 @@ from .export import export_row, is_confirmed_phishing, render as render_export
 from .iocs import collect_iocs, to_blocklist as iocs_to_blocklist, to_csv as iocs_to_csv, to_misp as iocs_to_misp
 from .metrics import queue_stats, render_queue_stats
 from .history.indicators import extract_indicators
-from .history.store import (HistoryStore, MigrationRequired, STATUS_TO_DISPOSITION, logic_hash,
+from .history.store import (HistoryStore, MigrationRequired, STATUS_TO_DISPOSITION, UnsupportedSchema,
+                            logic_hash,
                             migrate as migrate_history, read_schema_version)
 from .loader import SCAN_SUFFIXES, LoadError, is_mail_candidate, load_any
 from .models import Level
@@ -181,6 +182,17 @@ def _mirror_decision(alerts_dir: Path, alert, status: str, note: str, config_dir
         return f"note: decision not mirrored to history ({safe_text(e, 120)})"
 
 
+def _open_store(db_path, create=False):
+    """HistoryStore.open for CLI commands: a database whose schema is not one
+    this arer knows is a ClickException (the message names the found and the
+    supported versions), never a traceback and never the misleading
+    'no history yet' hint."""
+    try:
+        return HistoryStore.open(db_path, create=create)
+    except UnsupportedSchema as e:
+        raise click.ClickException(safe_text(e, 240)) from e
+
+
 def _save(cfg, email, verdict, name) -> int:
     store = HistoryStore.open(cfg.history.db_path, create=True)
     try:
@@ -292,7 +304,14 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
             click.echo(render_terminal(v, cfg))
 
         if save if save is not None else cfg.history.auto_save:
-            times = _save(cfg, email, v, p.name)
+            try:
+                times = _save(cfg, email, v, p.name)
+            except UnsupportedSchema as e:
+                # a verdict exit code must stand (the exit-code contract is
+                # frozen), so a refused history write is a loud stderr note,
+                # not a ClickException that would abort the whole batch
+                click.echo(click.style(f"history: not saved - {safe_text(e, 200)}", fg="red"), err=True)
+                times = 1
             if times == 0:
                 click.echo(click.style("history: not saved - this scan has no verified SHA-256 "
                                        "(parser-JSON input). Rescan the original .eml/.msg to store it.", fg="yellow"))
@@ -835,7 +854,7 @@ def alerts_confirm_campaign(directory, campaign_id, reject, note, config_dir):
         cfg = load_config(config_dir)
     except ConfigError as e:
         raise click.ClickException(str(e)) from e
-    store = HistoryStore.open(cfg.history.db_path, create=True)
+    store = _open_store(cfg.history.db_path, create=True)
     if store is None:
         raise click.ClickException(f"no history database at {cfg.history.db_path}")
     try:
@@ -1058,7 +1077,7 @@ def label_cmd(target, label, note, config_dir):
         cfg = load_config(config_dir)
     except ConfigError as e:
         raise click.ClickException(str(e)) from e
-    store = HistoryStore.open(cfg.history.db_path, create=True)
+    store = _open_store(cfg.history.db_path, create=True)
     try:
         p = Path(target)
         if p.is_file():
@@ -1097,7 +1116,7 @@ def _open_history(config_dir, create=False):
         cfg = load_config(config_dir)
     except ConfigError as e:
         raise click.ClickException(str(e)) from e
-    store = HistoryStore.open(cfg.history.db_path, create=create)
+    store = _open_store(cfg.history.db_path, create=create)
     if store is None and not create:
         raise click.ClickException(f"no history yet at {cfg.history.db_path}. Start with: arer scan FILE --save   or   arer label FILE phish")
     return cfg, store
@@ -1191,7 +1210,7 @@ def history_import_dispositions(queue, config_dir):
         cfg = load_config(config_dir)
     except ConfigError as e:
         raise click.ClickException(str(e)) from e
-    store = HistoryStore.open(cfg.history.db_path, create=False)
+    store = _open_store(cfg.history.db_path, create=False)
     if store is None:
         raise click.ClickException(f"no history database at {cfg.history.db_path} (create one with a labeled scan)")
     counts = {"imported": 0, "duplicate": 0, "skipped_new": 0, "unreadable": 0}

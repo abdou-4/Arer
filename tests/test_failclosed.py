@@ -17,6 +17,7 @@ R1.5 - the analyzer stage runs in a killable subprocess:
 
 Fault injection (tests only): ARER_FAULT_INJECT=<analyzer>[:die|:hang].
 """
+import io
 import subprocess
 import sys
 import time
@@ -264,14 +265,20 @@ def test_worker_serve_survives_a_malformed_line(mails):
 FAKE_WORKER = """\
 import json, os, sys
 flood = os.environ.get("ARER_FAKE_FLOOD") == "1"
+seen = 0
 for raw in sys.stdin.buffer:
     try:
         req = json.loads(raw.decode("utf-8"))
     except Exception:
         continue
+    seen += 1
     if flood:
         sys.stderr.write("f" * 200001)
         sys.stderr.flush()
+    if os.environ.get("ARER_FAKE_BIGOUT") == "1" and seen == 1:
+        sys.stdout.buffer.write(b"x" * 200001 + b"\\n")   # ONE answer line above any cap
+        sys.stdout.buffer.flush()
+        continue
     out = {"id": req.get("id"), "findings": [], "errors": []}
     sys.stdout.buffer.write(json.dumps(out).encode("utf-8") + b"\\n")
     sys.stdout.buffer.flush()
@@ -391,5 +398,77 @@ def test_oversized_answer_fails_closed_and_the_pool_recovers(mails, tmp_path, mo
             findings, errors = pool.run_analyzers(email, cfg, None)
             assert findings == []
             assert any("oversized answer" in e for e in errors), errors
+    finally:
+        pool.kill()
+
+
+class _RecordingReader:
+    """BytesIO twin that records every readline SIZE it is asked for."""
+
+    def __init__(self, data):
+        self._buf = io.BytesIO(data)
+        self.sizes = []
+
+    def readline(self, size=-1):
+        self.sizes.append(size)
+        return self._buf.readline(size)
+
+
+def test_pump_reads_in_bounded_chunks_and_stays_in_sync(monkeypatch):
+    """_pump used to iterate `for line in proc.stdout`, which buffers ONE
+    WHOLE answer line (however big) in memory before the len() check ever
+    runs - the cap protected the queue, not the reader. It now reads with
+    readline(_MAX_WORKER_OUTPUT + 1): no single read is ever bigger than the
+    cap plus one byte, an oversized line becomes the _ANSWER_TOO_LARGE
+    sentinel, and the rest of the line is drained in bounded chunks until the
+    newline so the stream stays in sync for the next answer."""
+    import io
+    import json as _json
+    import queue as _queue
+    import types
+
+    import arer.worker as w
+    monkeypatch.setattr(w, "_MAX_WORKER_OUTPUT", 16)
+    big = _json.dumps({"id": 1, "findings": [], "errors": []}).encode("utf-8") + b"\n"
+    small = b'{"id":2}\n'                             # a normal (under-cap) next line
+    assert len(big) > 16
+    reader = _RecordingReader(big + small)
+    q = _queue.Queue()
+    w._pump(types.SimpleNamespace(stdout=reader), q)
+    assert q.get(timeout=5) is w._ANSWER_TOO_LARGE, "the huge line must never reach the queue"
+    assert q.get(timeout=5) == small, "the NEXT line must still be read whole (stream in sync)"
+    assert q.get(timeout=5) is None, "the EOF marker must still arrive"
+    assert reader.sizes, "the pump must read through readline(size)"
+    assert all(s is not None and s <= w._MAX_WORKER_OUTPUT + 1 for s in reader.sizes), \
+        f"an unbounded read buffers the whole line: {reader.sizes}"
+
+
+def test_giant_answer_fails_closed_without_buffering_it_whole(mails, tmp_path, monkeypatch):
+    """A fake worker whose FIRST answer is one line far above the cap must
+    fail closed on the sentinel path (never the timeout, never the whole
+    line held in the parent), and the pool must serve the NEXT mail with a
+    fresh worker afterwards."""
+    import time as _time
+
+    import arer.worker as w
+    fake = tmp_path / "fake_worker.py"
+    fake.write_text(FAKE_WORKER, encoding="utf-8")
+    monkeypatch.setattr(w, "_WORKER_CMD", [sys.executable, str(fake)])
+    monkeypatch.setattr(w, "_MAX_WORKER_OUTPUT", 64 * 1024)   # the fake prints 200 KB
+    monkeypatch.setenv("ARER_FAKE_BIGOUT", "1")
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    pool = w.WorkerPool()
+    try:
+        t0 = _time.time()
+        findings, errors = pool.run_analyzers(email, cfg, None)
+        elapsed = _time.time() - t0
+        assert findings == []
+        assert errors == ["analyzer worker: oversized answer, treated as an error"], errors
+        assert elapsed < 10, f"the giant answer stalled {elapsed:.1f}s - it was buffered whole"
+        monkeypatch.delenv("ARER_FAKE_BIGOUT")               # next worker answers normally
+        findings2, errors2 = pool.run_analyzers(email, cfg, None)
+        assert errors2 == [], f"the pool must serve the next mail: {errors2}"
+        assert findings2 == []
     finally:
         pool.kill()

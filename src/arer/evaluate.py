@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .config import Config
-from .history.store import HistoryStore, logic_hash, rescore
+from .history.store import HistoryStore, UnsupportedSchema, logic_hash, rescore
 from .loader import LoadError, is_mail_candidate, load_any
 from .models import Level, Verdict
 from .pipeline import run_pipeline
@@ -195,7 +195,11 @@ def _read_manifest(root: Path, files: list[Path]) -> dict[str, ManifestEntry]:
 def evaluate_history(cfg: Config, only: str = "all", include_history: bool = False) -> Evaluation:
     """Re-score every LABELED scan in your history with today's rules.yaml. Instant, and needs no e-mail files."""
     ev = Evaluation([], [])
-    store = HistoryStore.open(cfg.history.db_path, readonly=True)
+    try:
+        store = HistoryStore.open(cfg.history.db_path, readonly=True)
+    except UnsupportedSchema as e:
+        ev.errors.append(safe_text(e, 240))       # a foreign schema is not "no history": name it
+        return ev
     if store is None:
         ev.errors.append(f"no history database at {cfg.history.db_path} yet (use `arer label` or `arer history import`)")
         return ev

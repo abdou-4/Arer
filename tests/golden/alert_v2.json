@@ -85,8 +85,8 @@
     "analyzer_errors": []
   },
   "config_hash": "8b2ead522f36009e",
-  "engine_version": "0.0.1",
-  "parser_version": "4.8.0",
+  "engine_version": "hermetic-engine-0",
+  "parser_version": "hermetic-parser-0",
   "sha256_verified": false,
   "analysis_complete": true,
   "analysis_errors": [],

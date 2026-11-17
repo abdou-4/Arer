@@ -158,12 +158,28 @@ def _serve() -> int:
 
 def _pump(proc, q) -> None:
     """Reader thread: move the worker's answer lines onto the queue until EOF.
-    Size is checked BEFORE anything else touches the line - one answer bigger
-    than _MAX_WORKER_OUTPUT is replaced by the _ANSWER_TOO_LARGE sentinel, so
-    an oversized answer never sits in memory whole or reaches json.loads."""
+    Reading is BOUNDED: iterating `for line in proc.stdout` buffers ONE WHOLE
+    line (however big) before the len() check ever runs - the cap protected
+    the queue, not the reader's memory. readline(_MAX_WORKER_OUTPUT + 1)
+    never holds more than the cap plus one byte; a line that overflows the
+    cap becomes the _ANSWER_TOO_LARGE sentinel (never the huge line itself)
+    and its remainder is drained in bounded chunks until the newline (or
+    EOF) so the stream stays in sync. The parent kills the worker on the
+    sentinel anyway."""
+    chunk_cap = _MAX_WORKER_OUTPUT + 1
     try:
-        for line in proc.stdout:
-            q.put(_ANSWER_TOO_LARGE if len(line) > _MAX_WORKER_OUTPUT else line)
+        while True:
+            chunk = proc.stdout.readline(chunk_cap)
+            if not chunk:
+                break                                  # EOF
+            if len(chunk) > _MAX_WORKER_OUTPUT:
+                q.put(_ANSWER_TOO_LARGE)
+                while not chunk.endswith(b"\n"):       # the line continues past the cap:
+                    chunk = proc.stdout.readline(chunk_cap)   # drain it, bounded
+                    if not chunk:
+                        break                          # EOF mid-line
+                continue
+            q.put(chunk)
     except Exception:                                 # noqa: BLE001 - reader dies with the pipe
         pass
     q.put(None)                                       # EOF marker
