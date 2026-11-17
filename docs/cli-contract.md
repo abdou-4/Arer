@@ -18,6 +18,7 @@ The CLI, the watcher, the docs and the tests all read that module.
 | 5 | alert — high confidence | `MALICIOUS` |
 | 6 | no decision (mail parsed but produced no usable signals) | `INSUFFICIENT_DATA` |
 | 7 | analysis failure (analyzers crashed/timed out; result is incomplete, never a clean success) | — |
+| 8 | record-write failure — `RECORD_ERROR` (an alert record could not be written: collision, disk full, permission) — the batch continues and every verdict still prints, but the lost record is never hidden behind a verdict code | — |
 
 ## Rules
 
@@ -37,7 +38,11 @@ The CLI, the watcher, the docs and the tests all read that module.
   outranks an analysis error (7), which outranks a no-decision (6), which
   outranks clean (0). One unreadable file does not mask a `MALICIOUS`
   verdict on another (exit 5), and a `MALICIOUS` verdict is not hidden by an
-  unrelated load failure either.
+  unrelated load failure either. A failed alert-record write (8) outranks
+  EVERY verdict: a batch with a `MALICIOUS` mail and a record that could not
+  be queued exits 8, not 5 — the verdicts are still on stdout, but the
+  missing record must be unmistakable. Code 8 is not in `VERDICT_EXITS`, so
+  the watcher archives such mail under `failed/`.
 - Every scanned file still gets its full report on stdout/stderr; exit codes
   only summarise the batch.
 

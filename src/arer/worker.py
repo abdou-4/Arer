@@ -117,10 +117,11 @@ def _serve() -> int:
     for raw in sys.stdin.buffer:
         if len(raw) > _MAX_REQUEST_BYTES:
             continue
-        try:
-            req = json.loads(raw.decode("utf-8"))
-            email = Email.model_validate(req["email"])
-            cfg = Config.model_validate(req["config"])
+        req = None                                       # reset per iteration: a malformed
+        try:                                             # line must answer id None, not echo
+            req = json.loads(raw.decode("utf-8"))        # the PREVIOUS request's id, and the
+            email = Email.model_validate(req["email"])   # UnboundLocalError that killed the
+            cfg = Config.model_validate(req["config"])   # worker here is exactly the bug.
             analyzers = get_analyzers(set(req.get("skip") or ()))
             findings, errors = analyze_with_threads(email, cfg, analyzers)
             out = {"id": req.get("id"), "findings": [f.model_dump(mode="json") for f in findings],

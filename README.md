@@ -164,7 +164,7 @@ Every menu entry has a matching command (details and every option in [USAGE.md](
 | Blocklists | `arer feeds` | Download and inspect the blocklists. |
 | Convert emails to JSON | `arer parse` | Convert `.eml`/`.msg` into JSON. |
 
-Exit codes make it scriptable (`scan`): 0 CLEAN, 3 SUSPICIOUS, 4 LIKELY_PHISHING, 5 MALICIOUS, 6 INSUFFICIENT_DATA (no decision, not an alert), 7 ANALYSIS_ERROR (analyzers failed), 1 a file failed, 2 usage error. Match exact codes or the allowlist in `arer.exitcodes`; never "exit >= 3".
+Exit codes make it scriptable (`scan`): 0 CLEAN, 3 SUSPICIOUS, 4 LIKELY_PHISHING, 5 MALICIOUS, 6 INSUFFICIENT_DATA (no decision, not an alert), 7 ANALYSIS_ERROR (analyzers failed), 8 RECORD_ERROR (an alert record could not be written; outranks every verdict), 1 a file failed, 2 usage error. Match exact codes or the allowlist in `arer.exitcodes`; never "exit >= 3".
 
 ## Configuration
 

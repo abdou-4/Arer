@@ -11,6 +11,7 @@ Exit codes (frozen table, see docs/cli-contract.md and src/arer/exitcodes.py)
     scan  : 0 CLEAN | 3 SUSPICIOUS | 4 LIKELY_PHISHING | 5 MALICIOUS
             6 INSUFFICIENT_DATA (no decision, not an alert)
             7 ANALYSIS_ERROR (analyzers failed, result incomplete)
+            8 RECORD_ERROR (an alert record could not be written)
             1 a file failed | 2 usage error
     Scripts must match exact codes (or the allowlist in arer.exitcodes),
     never "exit >= 3": code 6 is a no-decision and code 7 is not a verdict.
@@ -28,9 +29,10 @@ import click
 
 from .config import ConfigError, load_config
 from .exitcodes import (ALERT_EXITS, ANALYSIS_ERROR_EXIT, EXIT_CODES, EXIT_SEVERITY,
-                        exit_code_for, is_alert_exit, is_analysis_incomplete, scan_exit_code)
+                        RECORD_ERROR_EXIT, exit_code_for, is_alert_exit, is_analysis_incomplete,
+                        scan_exit_code)
 from .evaluate import _label_of, evaluate, evaluate_history, render
-from .alert import (AlertCollisionError, build_alert, is_alert_level, read_alerts,
+from .alert import (AlertCollisionError, AlertError, build_alert, is_alert_level, read_alerts,
                     to_json as alert_to_json, write_alert)
 from .campaign import (build_campaigns, build_clusters, campaign_level, campaign_status,
                        strong_keys)
@@ -257,7 +259,7 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
         jsonl_fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         jsonl_fh.flush()
 
-    codes, failed = [], False
+    codes, failed, write_failed = [], False, False
     for p in paths:
         try:
             email = load_any(p, cfg, trust=trust)
@@ -301,9 +303,15 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
                 # R4.4: v2 records store the canonical (RAW) representation;
                 # defanging happens exactly once at output/serialization.
                 write_alert(alert, alerts_dir, defang=False)
-            except AlertCollisionError as e:            # never overwrite another mail's record
-                click.echo(click.style(f"✗ {safe_text(e, 200)}", fg="red"), err=True)
+            except (AlertCollisionError, OSError, AlertError) as e:
+                # A failed record write must never abort the batch, lose the
+                # verdicts of the remaining mails, OR hide behind a verdict
+                # exit code: it is tracked separately and surfaces as exit 8
+                # (RECORD_ERROR, src/arer/exitcodes.py) after the loop.
+                click.echo(click.style(f"✗ {safe_text(p.name)}: alert record not written "
+                                       f"({safe_text(e, 200)})", fg="red"), err=True)
                 failed = True
+                write_failed = True
         _jsonl_line(p, ok=True, v=v)
         codes.append(code)
 
@@ -311,6 +319,8 @@ def scan(input, recursive, trust, quiet, json_path, out_dir, alerts_dir, raw, st
         jsonl_fh.close()
     if failed:
         codes.append(1)
+    if write_failed:
+        codes.append(RECORD_ERROR_EXIT)   # outranks every verdict: a lost record is never a clean success
     sys.exit(max(codes, key=_EXIT_SEVERITY.get) if codes else 0)  # noqa: RUF015 - sys.exit wants the code, not the arg
 
 

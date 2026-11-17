@@ -233,6 +233,7 @@ Two extra lines can appear:
 | 5 | `MALICIOUS` (alert) |
 | 6 | `INSUFFICIENT_DATA` - a no-decision, **not** an alert |
 | 7 | `ANALYSIS_ERROR` - analyzers failed, result incomplete |
+| 8 | `RECORD_ERROR` - an alert record could not be written; the batch continued, but the lost record outranks every verdict code |
 | 1 | a file could not be processed |
 | 2 | usage error (bad flags) |
 

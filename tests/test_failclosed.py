@@ -220,3 +220,40 @@ def test_pool_respawns_after_a_hang_for_the_next_mail(mails, fault_env):
     r2 = CliRunner().invoke(__import__("arer.cli", fromlist=["main"]).main,
                             ["scan", str(mails / "clean.eml"), "-q"])
     assert r2.exit_code == 0, r2.output
+
+
+def test_worker_serve_survives_a_malformed_line(mails):
+    """A malformed request line must produce an error answer with id None and
+    the worker must KEEP SERVING. Before the fix the except block referenced
+    `req`, which was unbound when the FIRST line failed json.loads (the
+    UnboundLocalError killed the worker) and echoed the PREVIOUS request's
+    id on later lines."""
+    import json as _json
+    cfg = load_config()
+    email = load_any(mails / "clean.eml", cfg)
+    request = _json.dumps({"id": 42, "email": email.model_dump(mode="json"),
+                           "config": cfg.model_dump(mode="json"), "skip": []})
+    proc = subprocess.Popen([sys.executable, "-m", "arer.worker", "--serve"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    try:
+        proc.stdin.write(b"{not json\n")             # malformed FIRST line
+        proc.stdin.flush()
+        first = proc.stdout.readline()
+        proc.stdin.write(request.encode("utf-8") + b"\n")
+        proc.stdin.flush()
+        second = proc.stdout.readline()
+    finally:
+        proc.stdin.close()
+        proc.kill()
+        proc.wait(timeout=10)
+
+    assert first, "no answer for the malformed line: the worker died"
+    a1 = _json.loads(first)
+    assert a1["id"] is None, f"a malformed line must answer id None, got {a1['id']!r}"
+    assert a1["findings"] == [] and a1["errors"], a1
+    assert "worker request failed" in a1["errors"][0]
+    assert second, "the worker died after the malformed line - it must keep serving"
+    a2 = _json.loads(second)
+    assert a2["id"] == 42, f"the next request must be answered normally: {a2}"
+    assert a2["errors"] == [] and a2["findings"], a2

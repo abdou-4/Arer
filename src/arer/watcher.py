@@ -19,9 +19,10 @@ kill the watcher or poison the next mail:
 R1.3: classification is an ALLOWLIST, never a numeric range. Only the valid
 verdict exits (0, 3, 4, 5, 6 - arer.exitcodes.VERDICT_EXITS) count as a
 completed scan and land in handled/. Everything else is failed/: operational
-errors (1, 2), the analysis-failure code (7), negative return codes (the
-child was killed by a signal), and ANY unknown/future code. A crashed or
-signal-killed scan can therefore never be archived as successfully handled.
+errors (1, 2), the analysis-failure code (7), the record-write failure code
+(8), negative return codes (the child was killed by a signal), and ANY
+unknown/future code. A crashed or signal-killed scan can therefore never be
+archived as successfully handled.
 
 v1 watches the TOP LEVEL of the drop folder only, and only files with a
 known mail extension (same list as `arer scan` minus content sniffing): a
@@ -46,7 +47,7 @@ from .exitcodes import VERDICT_EXITS
 from .loader import SCAN_SUFFIXES
 
 HANDLED_DIR = "handled"     # scan completed with a valid verdict exit (docs/cli-contract.md)
-FAILED_DIR = "failed"       # anything else: exit 1/2/7, a signal kill, an unknown code, a timeout,
+FAILED_DIR = "failed"       # anything else: exit 1/2/7/8, a signal kill, an unknown code, a timeout,
                             # a launch error, or an archive failure (R1.3 allowlist)
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -136,9 +137,9 @@ def scan_one(mail: Path, *, argv: list[str], timeout: float = 60.0,
 
     R1.3 allowlist: only VERDICT_EXITS (0, 3, 4, 5, 6) is a completed scan ->
     handled/. A hang is killed at `timeout` seconds; operational exits (1, 2),
-    the analysis-failure code (7), signal kills (negative codes), unknown
-    codes, launch errors and archive failures all archive the mail to failed/
-    and report the reason - the pass continues.
+    the analysis-failure code (7), the record-write failure code (8), signal
+    kills (negative codes), unknown codes, launch errors and archive failures
+    all archive the mail to failed/ and report the reason - the pass continues.
 
     R6.4: the mail's size and mtime are compared before and after the scan;
     a file that CHANGED while being scanned (a producer rewrote it) is a

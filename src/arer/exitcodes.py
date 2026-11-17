@@ -16,6 +16,9 @@ The contract (docs/cli-contract.md):
     6  INSUFFICIENT_DATA  a verdict; a NO-DECISION, never an alert
     7  ANALYSIS_ERROR     NOT a verdict: analyzers failed, result incomplete
                           (fail-closed; introduced with the R1.4 change)
+    8  RECORD_ERROR       NOT a verdict: an alert record could not be written
+                          (collision, disk full, permissions). Introduced so a
+                          failed queue write is never hidden behind a verdict code.
 
 Rules that replace the old blanket advice:
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 from .models import Level
 
 ANALYSIS_ERROR_EXIT = 7
+RECORD_ERROR_EXIT = 8
 
 # verdict level -> exit code (frozen; changing it is a contract change)
 EXIT_CODES: dict[Level, int] = {
@@ -52,13 +56,17 @@ ALERT_EXITS = frozenset(code for lv, code in EXIT_CODES.items()
                         if lv in (Level.SUSPICIOUS, Level.LIKELY_PHISHING, Level.MALICIOUS))
 
 # Operational codes: the scan itself did not complete honestly.
-OPERATIONAL_EXITS = frozenset({1, 2, ANALYSIS_ERROR_EXIT})
+OPERATIONAL_EXITS = frozenset({1, 2, ANALYSIS_ERROR_EXIT, RECORD_ERROR_EXIT})
 
 # "Worst wins" batch order (the pre-remediation order [0, 1, 6, 3, 4, 5] is
 # preserved exactly; code 7 slots between a load failure and a no-decision).
 # A verdict outranks a load failure (1), which outranks an analysis error (7),
-# which outranks a no-decision (6), which outranks clean (0).
-EXIT_SEVERITY = {code: rank for rank, code in enumerate([0, 1, ANALYSIS_ERROR_EXIT, 6, 3, 4, 5])}
+# which outranks a no-decision (6), which outranks clean (0). A failed alert-
+# record write (8) outranks EVERY verdict: a queue that silently lost a record
+# must never be reported as a clean success (code 8 is never in VERDICT_EXITS,
+# so the watcher archives such mail under failed/).
+EXIT_SEVERITY = {code: rank for rank, code in enumerate(
+    [0, 1, ANALYSIS_ERROR_EXIT, 6, 3, 4, 5, RECORD_ERROR_EXIT])}
 
 
 def exit_code_for(level: Level) -> int:
